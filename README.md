@@ -4,13 +4,14 @@
 
 ## The Problem
 
-98.1% of Solana blocks run through Jito's auction system. This creates a pay-to-play block space market where MEV searchers can:
+98.1% of Solana blocks run through Jito's auction system. Solana's leader schedule is public, so bots know which validator produces the next block. 770 out of 773 validators run Jito — meaning when a bot submits a bundle, it lands nearly 100% of the time. This creates a pay-to-play block space market where:
 
-- **Sandwich attack** retail users by wrapping their trades in buy/sell bundles
-- **Frontrun** any transaction by paying higher tips to the block engine
-- **Extract value** from every block — during the TrumpCoin launch, 62% of $280M in volume used Jito bundles
+- **Sandwich attacks** — a bot places its own buy before your trade and its own sell after, profiting from the price impact your trade creates
+- **Frontrunning** — a bot sees your pending transaction and pays a higher priority fee to execute the same trade before you
+- **Bundled launches** — a few actors use Jito bundles to buy a token from dozens of wallets simultaneously at launch, making it look like organic demand, then dumping the supply on retail buyers who thought the launch was fair
+- **Coordinated sniping** — during the TrumpCoin launch, 62% of $280M in volume went through Jito bundles, meaning bots used guaranteed ordering to grab supply before retail could even land a transaction
 
-The result: retail users systematically lose value on every trade.
+The result: retail users systematically lose value on every trade, and token launches that appear organic are often controlled by a few wallets using bundles.
 
 ## The Solution
 
@@ -18,14 +19,18 @@ Ooze is an alternative block builder that uses **cryptographically randomized or
 
 ### How it works
 
-1. **No bundles** — all transactions compete equally, no atomic ordering guarantees for searchers
-2. **Tiered randomization** — transactions are grouped by priority fee tier, then **shuffled randomly within each tier** using ChaCha20 CSPRNG
-3. **MEV rebate** — any residual extraction value is redistributed to affected wallets
+1. **No bundles** — all transactions are individual. No one can guarantee execution order or coordinate across multiple wallets atomically.
+2. **Tiered randomization** — transactions are grouped by priority fee tier, then **shuffled randomly within each tier** using ChaCha20 CSPRNG. Paying more gets you into a higher tier, but not a specific position.
+3. **MEV fee redistribution (concept)** — the goal is to return a portion of priority fees collected on Ooze validator blocks back to all wallets that transacted in that block. This is in concept phase only — the mechanism for on-chain redistribution is being designed and has not been implemented yet.
 4. **Verifiable entropy** — architecture designed to plug in VRF/QRNG sources for on-chain proof of fair ordering
 
 ### Why this stops MEV
 
-Sandwich attacks require **deterministic ordering** — the attacker MUST be positioned before AND after the victim. When ordering within a tier is random, this guarantee disappears. Our Monte Carlo simulations show **>95% reduction** in successful sandwich attacks.
+**Sandwich attacks** require the attacker's buy to land before the victim and their sell to land after. With randomized ordering within tiers, the attacker cannot guarantee position. Our Monte Carlo simulations show **>83% reduction** in successful sandwich attacks.
+
+**Bundled launches** are eliminated entirely — Ooze does not process bundles. Each transaction is treated individually. A bad actor trying to buy from 50 wallets simultaneously would have those 50 transactions scattered randomly across the block instead of executing atomically together.
+
+**Frontrunning** becomes unreliable — paying a higher priority fee puts you in a higher tier, but your position within that tier is random. You can't guarantee you land before a specific transaction.
 
 ## Architecture
 
@@ -69,8 +74,8 @@ cargo run --release
 This runs two scenarios (DEX sandwich attack, memecoin launch) through three ordering strategies and shows:
 - Transaction execution order under each strategy
 - MEV events detected
-- Value extracted vs rebated
-- Monte Carlo analysis of sandwich success rates
+- Value extracted under Jito vs Ooze ordering
+- Monte Carlo analysis of sandwich success rates across 1000 random orderings
 
 ## Project Structure
 
@@ -78,7 +83,7 @@ This runs two scenarios (DEX sandwich attack, memecoin launch) through three ord
 src/
 ├── types.rs          # Transaction, ordering result, MEV event types
 ├── jito_ordering.rs  # Jito/Agave-style priority auction (the status quo)
-├── ooze_ordering.rs  # Ooze fair ordering with randomization + rebate
+├── ooze_ordering.rs  # Ooze fair ordering with randomization
 ├── scenarios.rs      # Realistic transaction scenarios for comparison
 ├── main.rs           # Demo binary with colored output
 └── lib.rs            # Module root
@@ -91,8 +96,9 @@ src/
 | Active Solana validators | 773 |
 | Running Jito client | 770 (98.1%) |
 | Validators lost since Oct 2024 | ~4,600 (85%) |
-| Revenue gap top vs bottom | 920x |
-| Peak Jito tips (% of block revenue) | 50-66% |
+| Revenue gap top vs bottom tier | 920x |
+| Jito bundle hit rate | ~100% (770/773 leaders run Jito) |
+| Peak Jito tips (% of block revenue) | 50-66% (late 2024) |
 
 Full analysis: [Solana Validator Economics Dashboard](https://solana-validator-dashboard-7jlzowd9tcm93cafoend66.streamlit.app/)
 
@@ -102,7 +108,7 @@ Full analysis: [Solana Validator Economics Dashboard](https://solana-validator-d
 - [x] MEV detection and quantification
 - [x] Monte Carlo sandwich probability analysis
 - [ ] Real mempool data integration (Solana RPC websocket)
-- [ ] On-chain rebate program (Anchor/native Solana program)
+- [ ] MEV fee redistribution mechanism design (concept — not yet implemented)
 - [ ] Agave validator client fork with Ooze scheduler
 - [ ] Stake pool for fair-ordering validator delegation
 - [ ] Quantum entropy source integration

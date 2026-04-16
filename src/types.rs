@@ -129,6 +129,12 @@ pub enum MevType {
     Sandwich,
     /// Bundle guarantees ordering for extraction
     BundleExtraction,
+    /// Multiple wallets controlled by same actor buying in same block
+    CoordinatedBuy,
+    /// Single signer with multiple txs in one block (repeat actor)
+    RepeatSigner,
+    /// Extreme priority fee disparity — someone paying 10x+ average to guarantee position
+    FeeDisparity,
 }
 
 impl fmt::Display for MevType {
@@ -137,6 +143,9 @@ impl fmt::Display for MevType {
             Self::Frontrun => write!(f, "Frontrun"),
             Self::Sandwich => write!(f, "Sandwich"),
             Self::BundleExtraction => write!(f, "Bundle Extraction"),
+            Self::CoordinatedBuy => write!(f, "Coordinated Buy"),
+            Self::RepeatSigner => write!(f, "Repeat Signer"),
+            Self::FeeDisparity => write!(f, "Fee Disparity"),
         }
     }
 }
