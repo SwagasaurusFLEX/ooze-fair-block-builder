@@ -1,8 +1,5 @@
 use colored::*;
-use ooze_fair_block_builder::token_forensics::{
-    analyze_token_launch, replay_jito, replay_ooze, ForensicsReport,
-};
-use ooze_fair_block_builder::types::MevType;
+use ooze_fair_block_builder::token_forensics::{analyze_token, ForensicsReport};
 use std::env;
 
 #[tokio::main]
@@ -12,269 +9,331 @@ async fn main() {
         if args.len() > 2 { args[2].clone() }
         else { eprintln!("{}", "Set SOLTRACKER_API_KEY env var".red()); std::process::exit(1); }
     });
-    let token = if args.len() > 1 { args[1].clone() }
+    let mint = if args.len() > 1 { args[1].clone() }
     else { eprintln!("{}", "Usage: token_forensics <MINT>".red()); std::process::exit(1); };
 
-    println!("{}", "═".repeat(72).purple());
-    println!("{}", "  OOZE Token Forensics — Launch & Dump Analysis".bold().purple());
-    println!("{}", "  Powered by Solana Tracker API".dimmed());
-    println!("{}\n", "═".repeat(72).purple());
-    println!("  Token: {}\n", token.cyan());
+    println!("{}", "═".repeat(76).purple());
+    println!("{}", "  OOZE — Token Forensics".bold().purple());
+    println!("{}", "  Bundler-to-Dumper Cross-Reference Analysis".dimmed());
+    println!("{}\n", "═".repeat(76).purple());
 
-    let r = match analyze_token_launch(&api_key, &token, 20).await {
+    let r = match analyze_token(&api_key, &mint).await {
         Ok(r) => r,
         Err(e) => { eprintln!("{}: {}", "Error".red().bold(), e); std::process::exit(1); }
     };
 
-    print_overview(&r);
-    print_launch_window(&r);
-    print_dump_analysis(&r);
-    print_top_wallets(&r);
-    print_patterns(&r);
-    print_replay_launch(&r);
+    print_vitals(&r);
+    print_bundler_summary(&r);
+    print_cross_reference(&r);
+    print_bundler_details(&r);
+    print_bottom_line(&r);
+    print_ooze_framing(&r);
 }
 
-fn print_overview(r: &ForensicsReport) {
-    println!("\n{}", "═".repeat(72).purple());
-    println!("{}", "  OVERVIEW".bold().white());
-    println!("{}", "═".repeat(72).purple());
-    println!("  Swaps:              {} ({} buys / {} sells)", r.total_swaps.to_string().bold(), r.total_buys.to_string().green(), r.total_sells.to_string().red());
-    println!("  Unique wallets:     {}", r.unique_wallets.to_string().bold());
-    println!("  Repeat wallets:     {}", if r.repeat_wallets > 0 { r.repeat_wallets.to_string().red().bold() } else { "0".green().bold() });
-    println!("  SOL volume:         {:.2} SOL", r.total_sol_volume);
-    println!("  Peak price:         ${:.6}  (mcap: ${:.0})", r.peak_price_usd, r.peak_mcap_usd);
-    println!("  Final price:        ${:.6}  (mcap: ${:.0})", r.final_price_usd, r.final_mcap_usd);
-    println!("  Max drop:           {}", if r.max_drop_pct > 50.0 { format!("{:.1}%", r.max_drop_pct).red().bold() } else { format!("{:.1}%", r.max_drop_pct).yellow().bold() });
-    println!("  Window:             {:.1} min", r.time_window_minutes);
-    println!("  Top 5 concentration:{}", if r.top5_concentration_pct > 50.0 { format!(" {:.1}%", r.top5_concentration_pct).red().bold() } else { format!(" {:.1}%", r.top5_concentration_pct).green().bold() });
-    println!("  Dumps detected:     {}", if !r.dump_events.is_empty() { r.dump_events.len().to_string().red().bold() } else { "0".green().bold() });
+fn format_age(hours: f64) -> String {
+    if hours < 1.0 { format!("{:.0}m", hours * 60.0) }
+    else if hours < 24.0 { format!("{:.1}h", hours) }
+    else { format!("{:.1}d", hours / 24.0) }
 }
 
-fn print_launch_window(r: &ForensicsReport) {
-    // First 30 minutes
-    let launch: Vec<_> = r.swaps.iter().filter(|s| s.minutes_since_first <= 30.0).collect();
-    if launch.is_empty() { return; }
+fn format_money(n: f64) -> String {
+    if n.abs() >= 1_000_000.0 { format!("${:.2}M", n / 1_000_000.0) }
+    else if n.abs() >= 1_000.0 { format!("${:.1}K", n / 1_000.0) }
+    else { format!("${:.2}", n) }
+}
 
-    let buy_count = launch.iter().filter(|s| s.direction == "buy").count();
-    let sell_count = launch.iter().filter(|s| s.direction == "sell").count();
-    let buy_sol: f64 = launch.iter().filter(|s| s.direction == "buy").map(|s| s.sol_amount).sum();
-    let sell_sol: f64 = launch.iter().filter(|s| s.direction == "sell").map(|s| s.sol_amount).sum();
-    let start_mcap = launch.first().map(|s| s.mcap_usd).unwrap_or(0.0);
-    let end_mcap = launch.last().map(|s| s.mcap_usd).unwrap_or(0.0);
+fn format_number(n: f64) -> String {
+    if n.abs() >= 1_000_000.0 { format!("{:.2}M", n / 1_000_000.0) }
+    else if n.abs() >= 1_000.0 { format!("{:.1}K", n / 1_000.0) }
+    else { format!("{:.0}", n) }
+}
 
-    println!("\n{}", "═".repeat(72).green());
-    println!("{}", "  LAUNCH WINDOW (first 30 minutes)".bold().green());
-    println!("{}", "═".repeat(72).green());
-    println!("  Trades: {} ({} buys / {} sells)", launch.len(), buy_count.to_string().green(), sell_count.to_string().red());
-    println!("  Buy volume:  {:.4} SOL", buy_sol);
-    println!("  Sell volume: {:.4} SOL", sell_sol);
-    println!("  Mcap start:  ${:.0}", start_mcap);
-    println!("  Mcap end:    ${:.0}", end_mcap);
+fn print_vitals(r: &ForensicsReport) {
+    let t = &r.overview.token;
+    let p = &r.primary_pool;
+    let price_usd = p.price.usd.unwrap_or(0.0);
+    let mcap_usd = p.market_cap.usd;
 
-    println!("\n  {:>6} {:>8} {:>5} {:>10} {:>10} {:>10}", "Min", "Wallet", "Dir", "SOL", "Tokens", "Mcap $");
-    println!("  {}", "─".repeat(60).dimmed());
-    for s in launch.iter().take(25) {
-        let w = &s.wallet[..6.min(s.wallet.len())];
-        let d = if s.direction == "buy" { "BUY".green() } else { "SELL".red() };
-        println!("  {:>5.1}m {:>8} {:>5} {:>10.4} {:>10.0} {:>10.0}",
-            s.minutes_since_first, w, d, s.sol_amount, s.token_amount, s.mcap_usd);
+    println!("{}", format!("┌─── VITALS {}", "─".repeat(63)).cyan().bold());
+    println!("  {} {}  ({})", t.name.bold().white(), format!("${}", t.symbol).cyan(), t.mint.dimmed());
+    println!();
+    println!("  {:<16} {}", "Price:".dimmed(), format!("${:.8}", price_usd).bold());
+    println!("  {:<16} {}", "Market Cap:".dimmed(), format_money(mcap_usd).bold().green());
+    println!("  {:<16} {}", "Liquidity:".dimmed(), format_money(p.liquidity.usd).bold());
+    println!("  {:<16} {}", "Age:".dimmed(), format_age(r.age_hours).bold());
+    println!("  {:<16} {}", "Holders:".dimmed(), format_number(r.overview.holders as f64).bold());
+    println!("  {:<16} {}", "Primary venue:".dimmed(), p.market.clone().bold());
+
+    // Txns
+    println!();
+    let total_txns = r.overview.txns;
+    let buys = r.overview.buys;
+    let sells = r.overview.sells;
+    let sell_ratio = if total_txns > 0 { sells as f64 / total_txns as f64 * 100.0 } else { 0.0 };
+    println!("  {:<16} {} ({} buys / {} sells — {:.1}% sells)",
+        "Transactions:".dimmed(),
+        format_number(total_txns as f64).bold(),
+        format_number(buys as f64).green(),
+        format_number(sells as f64).red(),
+        sell_ratio,
+    );
+    if let Some(pool_txns) = &p.txns {
+        println!("  {:<16} {} total  /  24h: {}",
+            "Pool volume:".dimmed(),
+            format_money(pool_txns.volume).bold(),
+            format_money(pool_txns.volume_24h),
+        );
     }
-    if launch.len() > 25 { println!("  ... and {} more", launch.len() - 25); }
+
+    // Price movement
+    if let Some(e) = &r.overview.events {
+        println!();
+        print!("  {:<16} ", "Price changes:".dimmed());
+        if let Some(c) = &e.h1 { print!("1h: {}  ", colorize_pct(c.pct)); }
+        if let Some(c) = &e.h6 { print!("6h: {}  ", colorize_pct(c.pct)); }
+        if let Some(c) = &e.h24 { print!("24h: {}", colorize_pct(c.pct)); }
+        println!();
+    }
+
+    // Risk summary
+    println!();
+    if let Some(score) = r.overview.risk.score {
+        let risk_label = format!("{}/10", score);
+        let colored = if score >= 7 { risk_label.red().bold() }
+            else if score >= 4 { risk_label.yellow().bold() }
+            else { risk_label.green().bold() };
+        println!("  {:<16} {}", "Risk score:".dimmed(), colored);
+    }
+    if let Some(t10) = r.overview.risk.top10 {
+        let label = format!("{:.2}%", t10);
+        let colored = if t10 > 50.0 { label.red().bold() } else { label.yellow() };
+        println!("  {:<16} {}", "Top 10 hold:".dimmed(), colored);
+    }
+    if r.overview.risk.rugged {
+        println!("  {:<16} {}", "Status:".dimmed(), "RUGGED".red().bold());
+    }
+
+    // Risk flags
+    if !r.overview.risk.risks.is_empty() {
+        println!();
+        println!("  {}", "Risk flags:".dimmed());
+        for risk in &r.overview.risk.risks {
+            let icon = match risk.level.as_str() {
+                "danger" => "⛔".to_string(),
+                "warning" => "⚠ ".to_string(),
+                _ => "• ".to_string(),
+            };
+            let line = format!("{} {}", risk.name, risk.description);
+            let colored = if risk.level == "danger" { line.red() } else if risk.level == "warning" { line.yellow() } else { line.normal() };
+            println!("    {} {}", icon, colored);
+        }
+    }
+    println!("{}", format!("└{}", "─".repeat(73)).cyan());
 }
 
-fn print_dump_analysis(r: &ForensicsReport) {
-    if r.dump_events.is_empty() {
-        println!("\n  {} No 50%+ dumps detected in this data window.", "✓".green());
+fn colorize_pct(pct: f64) -> String {
+    if pct > 0.0 { format!("+{:.1}%", pct).green().to_string() }
+    else if pct < 0.0 { format!("{:.1}%", pct).red().to_string() }
+    else { format!("{:.1}%", pct).normal().to_string() }
+}
+
+fn print_bundler_summary(r: &ForensicsReport) {
+    println!("\n{}", format!("┌─── BUNDLER ACTIVITY {}", "─".repeat(53)).red().bold());
+    println!("  {:<26} {}", "Bundlers detected:", r.bundler_count.to_string().red().bold());
+    println!("  {:<26} {}", "Initial supply bundled:",
+        format!("{:.2}%", r.bundler_total_initial_pct).red().bold());
+    println!("  {:<26} {}", "Still held by bundlers:",
+        format!("{:.2}%", r.bundler_total_current_pct).yellow());
+    let dumped_pct = r.bundler_total_initial_pct - r.bundler_total_current_pct;
+    if dumped_pct > 0.0 {
+        println!("  {:<26} {}", "Dumped by bundlers:",
+            format!("{:.2}% of supply", dumped_pct).red().bold());
+    }
+    println!("{}", format!("└{}", "─".repeat(73)).red());
+}
+
+fn print_cross_reference(r: &ForensicsReport) {
+    println!("\n{}", format!("┌─── CROSS-REFERENCE: BUNDLERS vs TOP PROFITEERS {}", "─".repeat(26)).purple().bold());
+    println!("  {}", "The question: of the most profitable wallets, how many were launch bundlers?".dimmed());
+    println!();
+
+    let top_n = 25.min(r.cross_ref.len());
+    if top_n == 0 {
+        println!("  No data");
         return;
     }
 
-    for (i, dump) in r.dump_events.iter().enumerate() {
-        println!("\n{}", "═".repeat(72).red());
-        println!("{}", format!("  DUMP #{} — {:.1}% CRASH DETECTED", i + 1, dump.drop_pct).bold().red());
-        println!("{}", "═".repeat(72).red());
-        println!("  Peak:  ${:.6} (mcap ${:.0}) at {:.1}m", dump.peak_price_usd, dump.peak_mcap_usd, dump.peak_time_minutes);
-        println!("  Dump:  ${:.6} (mcap ${:.0}) at {:.1}m", dump.dump_price_usd, dump.dump_mcap_usd, dump.dump_time_minutes);
-        println!("  Drop:  {}", format!("{:.1}%", dump.drop_pct).red().bold());
-        println!("  Mcap wiped: ${:.0}", dump.peak_mcap_usd - dump.dump_mcap_usd);
+    println!("  {:>4} {:<10} {:>8} {:>10} {:>8} {:>8} {:>10}  {}",
+        "#", "Wallet", "Init%", "Profit", "Buys", "Sells", "Sold%", "Flag");
+    println!("  {}", "─".repeat(73).dimmed());
 
-        // Show trades in the dump window
-        let window: Vec<_> = r.swaps[dump.dump_window_start_idx..=dump.dump_window_end_idx.min(r.swaps.len() - 1)].iter().collect();
-        let w_buys = window.iter().filter(|s| s.direction == "buy").count();
-        let w_sells = window.iter().filter(|s| s.direction == "sell").count();
-        let w_buy_sol: f64 = window.iter().filter(|s| s.direction == "buy").map(|s| s.sol_amount).sum();
-        let w_sell_sol: f64 = window.iter().filter(|s| s.direction == "sell").map(|s| s.sol_amount).sum();
+    let mut bundler_count_in_top = 0;
+    let mut bundler_profit_in_top = 0.0;
+    let mut non_bundler_profit_in_top = 0.0;
 
-        println!("\n  Dump window (±15 min): {} trades ({} buys / {} sells)", window.len(), w_buys, w_sells);
-        println!("  Buy vol:  {:.4} SOL", w_buy_sol);
-        println!("  Sell vol: {:.4} SOL  ({})", w_sell_sol,
-            if w_sell_sol > w_buy_sol { format!("{:.1}x more sells", w_sell_sol / w_buy_sol.max(0.001)).red().to_string() }
-            else { "balanced".to_string() });
+    for (i, row) in r.cross_ref.iter().take(top_n).enumerate() {
+        if row.total_profit_usd <= 0.0 { continue; } // only profiteers
 
-        println!("\n  {:>6} {:>8} {:>5} {:>10} {:>10} {:>10}", "Min", "Wallet", "Dir", "SOL", "Tokens", "Mcap $");
-        println!("  {}", "─".repeat(60).dimmed());
-        for s in window.iter().take(20) {
-            let w = &s.wallet[..6.min(s.wallet.len())];
-            let d = if s.direction == "buy" { "BUY".green() } else { "SELL".red() };
-            println!("  {:>5.1}m {:>8} {:>5} {:>10.4} {:>10.0} {:>10.0}",
-                s.minutes_since_first, w, d, s.sol_amount, s.token_amount, s.mcap_usd);
-        }
-        if window.len() > 20 { println!("  ... and {} more in window", window.len() - 20); }
+        let wallet = &row.wallet[..10.min(row.wallet.len())];
+        let init = if row.is_bundler { format!("{:.2}%", row.initial_pct) } else { "—".to_string() };
+        let profit = format_money(row.total_profit_usd);
+        let profit_colored = if row.total_profit_usd > 10000.0 { profit.red().bold() }
+            else if row.total_profit_usd > 1000.0 { profit.red() }
+            else { profit.yellow() };
 
-        // Replay the dump window specifically
-        let window_swaps: Vec<_> = r.swaps[dump.dump_window_start_idx..=dump.dump_window_end_idx.min(r.swaps.len() - 1)].to_vec();
-        if !window_swaps.is_empty() {
-            let jito = replay_jito(&window_swaps);
-            let ooze = replay_ooze(&window_swaps, 42);
+        let flag = if row.is_bundler {
+            bundler_count_in_top += 1;
+            bundler_profit_in_top += row.total_profit_usd;
+            "🎯 BUNDLER".red().bold().to_string()
+        } else {
+            non_bundler_profit_in_top += row.total_profit_usd;
+            "—".dimmed().to_string()
+        };
 
-            println!("\n  {} Replay of dump window:", "▶".purple().bold());
-            print_replay_compact(&jito, &ooze);
-        }
+        let wallet_colored = if row.is_bundler { wallet.red().to_string() } else { wallet.to_string() };
+
+        println!("  {:>3}. {:<10} {:>8} {:>10} {:>8} {:>8} {:>9.0}%  {}",
+            i + 1, wallet_colored, init, profit_colored, row.buys, row.sells, row.sold_pct_of_held, flag);
     }
+
+    println!("  {}", "─".repeat(73).dimmed());
+    let total_in_top = bundler_profit_in_top + non_bundler_profit_in_top;
+    let bundler_share = if total_in_top > 0.0 { bundler_profit_in_top / total_in_top * 100.0 } else { 0.0 };
+
+    println!("  Bundlers in top {}: {} ({:.0}% of top-tier profit = {} of {})",
+        top_n,
+        bundler_count_in_top.to_string().red().bold(),
+        bundler_share,
+        format_money(bundler_profit_in_top).red().bold(),
+        format_money(total_in_top).bold()
+    );
+    println!("{}", format!("└{}", "─".repeat(73)).purple());
 }
 
-fn print_replay_compact(jito: &ooze_fair_block_builder::token_forensics::ReplayResult, ooze: &ooze_fair_block_builder::token_forensics::ReplayResult) {
-    let jp: f64 = jito.actors.iter().filter(|a| a.is_repeat && a.net > 0.0).map(|a| a.net).sum();
-    let op: f64 = ooze.actors.iter().filter(|a| a.is_repeat && a.net > 0.0).map(|a| a.net).sum();
+fn print_bundler_details(r: &ForensicsReport) {
+    let bundlers = r.overview.risk.bundlers.as_ref();
+    if bundlers.is_none() { return; }
+    let b = bundlers.unwrap();
+    if b.wallets.is_empty() { return; }
 
-    // Top buyer comparison
-    if let Some(jt) = jito.actors.first() {
-        if let Some(ot) = ooze.actors.iter().find(|a| a.wallet == jt.wallet) {
-            println!("    Top buyer ({}...):", &jt.wallet[..8.min(jt.wallet.len())]);
-            println!("      Jito: {:.0} tokens for {:.4} SOL", jt.tokens_got, jt.sol_in);
-            println!("      Ooze: {:.0} tokens for {:.4} SOL", ot.tokens_got, ot.sol_in);
-            if jt.tokens_got > 0.0 {
-                let diff = (jt.tokens_got - ot.tokens_got) / jt.tokens_got * 100.0;
-                if diff.abs() > 1.0 {
-                    println!("      → Ooze: {:.1}% {} tokens for top buyer", diff.abs(),
-                        if diff > 0.0 { "fewer" } else { "more" });
-                }
-            }
-        }
-    }
+    println!("\n{}", format!("┌─── TOP BUNDLERS BY INITIAL SUPPLY {}", "─".repeat(39)).red().bold());
+    println!("  {:<4} {:<10} {:>10} {:>10} {:>10}  {}",
+        "#", "Wallet", "Init %", "Still %", "Profit", "Status");
+    println!("  {}", "─".repeat(73).dimmed());
 
-    if jp > 0.001 || op > 0.001 {
-        println!("    Repeat wallet profits:");
-        println!("      Jito: {:.4} SOL", jp);
-        println!("      Ooze: {:.4} SOL", op);
-        if jp > op && jp > 0.0 {
-            println!("      → Ooze reduces profit by {:.1}%", (1.0 - op / jp) * 100.0);
-        }
-    }
-}
+    // Sort bundlers by initial percentage
+    let mut sorted: Vec<&_> = b.wallets.iter().collect();
+    sorted.sort_by(|a, b| b.initial_percentage.partial_cmp(&a.initial_percentage).unwrap_or(std::cmp::Ordering::Equal));
 
-fn print_top_wallets(r: &ForensicsReport) {
-    println!("\n{}", "─".repeat(72).dimmed());
-    println!("{}", "  TOP BUYERS".bold().white());
-    println!("{}", "─".repeat(72).dimmed());
-    println!("  {:>8} {:>10} {:>8} {:>8} {:>10} {:>5}/{:<4}  {}", "Wallet", "Tokens", "SOL in", "SOL out", "Profit", "B", "S", "Flags");
-    println!("  {}", "─".repeat(70).dimmed());
-
-    for p in r.wallet_profiles.iter().take(12) {
-        let w = &p.address[..8.min(p.address.len())];
-        let mut flags = Vec::new();
-        if p.is_repeat { flags.push("REPEAT".red().to_string()); }
-        if p.first_tx_minutes <= 1.0 { flags.push("EARLY".cyan().to_string()); }
-        if p.total_tokens_bought > 0.0 && p.total_tokens_sold > p.total_tokens_bought * 0.5 {
-            flags.push("DUMPED".red().bold().to_string());
-        }
-        let f = if flags.is_empty() { "—".to_string() } else { flags.join(" ") };
-        let profit = if p.net_profit_sol > 0.01 { format!("+{:.4}", p.net_profit_sol).green().to_string() }
-            else if p.net_profit_sol < -0.01 { format!("{:.4}", p.net_profit_sol).red().to_string() }
-            else { format!("{:.4}", p.net_profit_sol) };
-        println!("  {:>8} {:>10.0} {:>8.4} {:>8.4} {:>10} {:>5}/{:<4}  {}",
-            w, p.total_tokens_bought, p.total_sol_bought, p.total_sol_sold, profit, p.buy_count, p.sell_count, f);
-    }
-}
-
-fn print_patterns(r: &ForensicsReport) {
-    if r.mev_events.is_empty() { return; }
-
-    // Count by type
-    let coord = r.mev_events.iter().filter(|e| e.event_type == MevType::CoordinatedBuy).count();
-    let dumps = r.mev_events.iter().filter(|e| e.event_type == MevType::BundleExtraction).count();
-    let heavy = r.mev_events.iter().filter(|e| e.event_type == MevType::RepeatSigner).count();
-
-    println!("\n{}", "─".repeat(72).dimmed());
-    println!("{}", "  PATTERN SUMMARY".bold().red());
-    println!("{}", "─".repeat(72).dimmed());
-    if coord > 0 { println!("  {} Coordinated buys: {}", "⚠".red(), coord); }
-    if dumps > 0 { println!("  {} Pump & dump wallets: {}", "⚠".red(), dumps); }
-    if heavy > 0 { println!("  {} Heavy traders (5+ txs): {}", "⚠".red(), heavy); }
-
-    // Show top 5 most profitable dumpers
-    let mut dumpers: Vec<_> = r.mev_events.iter()
-        .filter(|e| e.event_type == MevType::BundleExtraction && e.value_extracted_lamports > 0)
+    // Build lookup for cross-ref data
+    let profit_lookup: std::collections::HashMap<&str, f64> = r.cross_ref.iter()
+        .filter(|c| c.is_bundler)
+        .map(|c| (c.wallet.as_str(), c.total_profit_usd))
         .collect();
-    dumpers.sort_by(|a, b| b.value_extracted_lamports.cmp(&a.value_extracted_lamports));
 
-    if !dumpers.is_empty() {
-        println!("\n  Top profitable dumpers:");
-        for d in dumpers.iter().take(5) {
-            println!("    {} {}", "→".red(), d.description);
-        }
+    for (i, w) in sorted.iter().take(15).enumerate() {
+        let wallet = &w.wallet[..10.min(w.wallet.len())];
+        let init = format!("{:.3}%", w.initial_percentage);
+        let still = format!("{:.3}%", w.percentage);
+        let profit = profit_lookup.get(w.wallet.as_str()).copied().unwrap_or(0.0);
+        let profit_str = if profit > 0.01 { format_money(profit).green().to_string() }
+            else if profit < -0.01 { format_money(profit).red().to_string() }
+            else { "—".dimmed().to_string() };
+
+        // Status: did they dump?
+        let status = if w.initial_percentage > 0.01 && w.percentage < w.initial_percentage * 0.1 {
+            "DUMPED 90%+".red().bold().to_string()
+        } else if w.initial_percentage > 0.01 && w.percentage < w.initial_percentage * 0.5 {
+            "dumped 50%+".red().to_string()
+        } else if w.initial_percentage > 0.01 {
+            "still holding".yellow().to_string()
+        } else {
+            "—".dimmed().to_string()
+        };
+
+        println!("  {:>3}. {:<10} {:>10} {:>10} {:>10}  {}",
+            i + 1, wallet, init, still, profit_str, status);
+    }
+    println!("{}", format!("└{}", "─".repeat(73)).red());
+}
+
+fn print_bottom_line(r: &ForensicsReport) {
+    println!("\n{}", "═".repeat(76).bold().white());
+    println!("{}", "  BOTTOM LINE".bold().white());
+    println!("{}", "═".repeat(76).bold().white());
+
+    // How much did bundlers extract vs lose
+    let total_winners = r.total_bundler_profit_usd + r.total_non_bundler_profit_usd;
+    let bundler_share_of_profit = if total_winners > 0.0 {
+        r.total_bundler_profit_usd / total_winners * 100.0
+    } else { 0.0 };
+
+    println!();
+    println!("  {} {} wallets bundled at launch, controlling {:.1}% of initial supply.",
+        "•".purple().bold(),
+        r.bundler_count.to_string().red().bold(),
+        r.bundler_total_initial_pct,
+    );
+
+    if r.bundlers_in_top_profiteers > 0 {
+        println!("  {} Of the top {} most profitable traders, {} are bundlers.",
+            "•".purple().bold(),
+            r.top_profiteers_checked,
+            r.bundlers_in_top_profiteers.to_string().red().bold(),
+        );
     }
 
-    // Ooze explanation
-    println!("\n{}", "═".repeat(72).purple());
-    println!("{}", "  WHAT OOZE CHANGES".bold().white());
-    println!("{}", "═".repeat(72).purple());
-    if r.repeat_wallets > 0 {
-        println!("  {} {} repeat wallets can't bundle — txs scatter randomly", "→".purple().bold(), r.repeat_wallets);
+    if r.total_bundler_profit_usd > 0.0 {
+        println!("  {} Bundlers extracted {} ({:.1}% of all winning trades).",
+            "•".purple().bold(),
+            format_money(r.total_bundler_profit_usd).red().bold(),
+            bundler_share_of_profit,
+        );
     }
-    if coord > 0 {
-        println!("  {} Coordinated buying breaks — no atomic multi-wallet execution", "→".purple().bold());
+
+    if r.total_retail_loss_usd > 0.0 {
+        println!("  {} Retail losers lost {} across non-bundler wallets.",
+            "•".purple().bold(),
+            format_money(r.total_retail_loss_usd).red().bold(),
+        );
     }
-    if dumps > 0 {
-        println!("  {} {} dumpers get worse entry prices — retail gets better ones", "→".purple().bold(), dumps);
+
+    // The damning match
+    if r.bundlers_in_top_profiteers > r.top_profiteers_checked / 4 {
+        println!();
+        println!("  {} {}",
+            "→".red().bold(),
+            format!("{:.0}% of top profiteers are bundlers. This was not retail speculation — it was coordinated extraction.",
+                r.bundlers_in_top_profiteers as f64 / r.top_profiteers_checked.max(1) as f64 * 100.0).red().bold(),
+        );
     }
 }
 
-fn print_replay_launch(r: &ForensicsReport) {
-    // Replay just the launch window (first 30 min)
-    let launch: Vec<_> = r.swaps.iter().filter(|s| s.minutes_since_first <= 30.0).cloned().collect();
-    if launch.is_empty() { return; }
+fn print_ooze_framing(r: &ForensicsReport) {
+    println!("\n{}", "═".repeat(76).purple());
+    println!("{}", "  WHAT OOZE CHANGES".bold().purple());
+    println!("{}", "═".repeat(76).purple());
 
-    let jito = replay_jito(&launch);
-    let ooze = replay_ooze(&launch, 42);
+    println!();
+    println!("  Under Jito today, these {} bundler wallets coordinated atomic", r.bundler_count.to_string().red().bold());
+    println!("  multi-wallet buys at launch. They acquired {:.1}% of initial supply",
+        r.bundler_total_initial_pct);
+    println!("  before any retail buyer saw the token.");
 
-    println!("\n{}", "═".repeat(72).purple());
-    println!("{}", "  REPLAY — Launch window (first 30 min)".bold().white());
-    println!("{}", "═".repeat(72).purple());
+    println!();
+    println!("  Under Ooze:");
+    println!("    {} Transactions scatter randomly within priority tiers", "•".purple());
+    println!("    {} Multi-wallet bundles cannot execute atomically", "•".purple());
+    println!("    {} Retail buys land between coordinated buys", "•".purple());
+    println!("    {} Initial supply distribution flattens", "•".purple());
+    println!("    {} Price impact per attacker wallet increases", "•".purple());
 
-    for (result, is_jito) in [(&jito, true), (&ooze, false)] {
-        let label = if is_jito { result.name.red().bold() } else { result.name.green().bold() };
-        println!("\n  {}", label);
-        println!("  {:>8} {:>10} {:>10} {:>10} {:>10}", "Wallet", "SOL in", "Tokens", "SOL out", "Profit");
-        for a in result.actors.iter().take(6) {
-            if a.sol_in == 0.0 && a.tokens_got == 0.0 && a.sol_out == 0.0 { continue; }
-            let w = &a.wallet[..8.min(a.wallet.len())];
-            let p = if a.net > 0.01 { format!("+{:.4}", a.net).green().to_string() }
-                else if a.net < -0.01 { format!("{:.4}", a.net).red().to_string() }
-                else { format!("{:.4}", a.net) };
-            println!("  {:>8} {:>10.4} {:>10.0} {:>10.4} {:>10}", w, a.sol_in, a.tokens_got, a.sol_out, p);
-        }
+    if r.total_bundler_profit_usd > 0.0 {
+        println!();
+        println!("  The {} extracted by bundlers on this single token",
+            format_money(r.total_bundler_profit_usd).red().bold());
+        println!("  is the extraction Ooze is designed to prevent.");
     }
 
-    // Final comparison
-    println!("\n{}", "─".repeat(72).dimmed());
-    if let Some(jt) = jito.actors.first() {
-        if let Some(ot) = ooze.actors.iter().find(|a| a.wallet == jt.wallet) {
-            println!("  Top buyer ({}...):", &jt.wallet[..8.min(jt.wallet.len())]);
-            println!("    Jito: {:.0} tokens | Ooze: {:.0} tokens", jt.tokens_got, ot.tokens_got);
-            if jt.tokens_got > 0.0 {
-                let diff = (jt.tokens_got - ot.tokens_got) / jt.tokens_got * 100.0;
-                if diff.abs() > 1.0 {
-                    println!("    → {:.1}% {} tokens under Ooze", diff.abs(), if diff > 0.0 { "fewer" } else { "more" });
-                }
-            }
-        }
-    }
-
-    let jp: f64 = jito.actors.iter().filter(|a| a.is_repeat && a.net > 0.0).map(|a| a.net).sum();
-    let op: f64 = ooze.actors.iter().filter(|a| a.is_repeat && a.net > 0.0).map(|a| a.net).sum();
-    if jp > 0.001 {
-        println!("  Repeat wallet profits: Jito {:.4} SOL → Ooze {:.4} SOL", jp, op);
-        if jp > op { println!("    → Ooze reduces by {:.1}%", (1.0 - op / jp) * 100.0); }
-    }
     println!();
 }
