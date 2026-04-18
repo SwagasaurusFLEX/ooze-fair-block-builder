@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ooze</title>
+
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+canvas {
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.info {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+  font-size: 24px;
+  letter-spacing: 4px;
+  color: #00ff55;
+  pointer-events: none;
+  mix-blend-mode: difference;
+  text-shadow:
+    0 0 20px #00ff55,
+    0 0 40px #00ff55;
+  animation: pulse 2.5s ease-in-out infinite;
+  padding: 20px;
+  text-align: center;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.hint {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: monospace;
+  font-size: 11px;
+  letter-spacing: 3px;
+  color: #00ff55;
+  opacity: 0.35;
+  pointer-events: none;
+  text-shadow: 0 0 10px #00ff55;
+  animation: pulse 4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@media (max-width: 768px) {
+  .info { font-size: 12px; letter-spacing: 1px; padding: 10px; }
+  .hint { font-size: 9px; letter-spacing: 2px; }
+}
+
+/* Transition overlay */
+.transition {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 100;
+  transition: opacity 0.9s ease-in-out;
+}
+.transition.active {
+  opacity: 1;
+  pointer-events: all;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="c"></canvas>
+<div class="info"></div>
+<div class="hint">TRIPLE&nbsp;CLICK&nbsp;TO&nbsp;ENTER</div>
+<div class="transition" id="transition"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/webgl-fluid@0.3.0/dist/webgl-fluid.umd.min.js"></script>
+<script>
+setTimeout(() => {
+  const canvas = document.getElementById("c");
+
+  WebGLFluid(canvas, {
+    IMMEDIATE: true,
+    TRIGGER: "click",
+
+    SIM_RESOLUTION: 128,
+    DYE_RESOLUTION: 1024,
+
+    DENSITY_DISSIPATION: 0.975,
+    VELOCITY_DISSIPATION: 0.92,
+    PRESSURE: 0.15,
+    PRESSURE_ITERATIONS: 50,
+    CURL: 0,
+
+    SPLAT_RADIUS: 0.15,
+    SPLAT_FORCE: 8000,
+
+    COLORFUL: false,
+    PAUSED: false,
+    SHADING: true,
+    COLOR_UPDATE_SPEED: 0,
+
+    BACK_COLOR: { r: 0, g: 0, b: 0 },
+    TRANSPARENT: false,
+    COLOR: { r: 0, g: 1, b: 0.2 },
+
+    BLOOM: true,
+    BLOOM_ITERATIONS: 10,
+    BLOOM_RESOLUTION: 512,
+    BLOOM_INTENSITY: 1.2,
+    BLOOM_THRESHOLD: 0.5,
+    BLOOM_SOFT_KNEE: 0.4,
+
+    SUNRAYS: false
+  });
+}, 100);
+
+// Triple-click to enter analyzer
+(function() {
+  let clicks = 0;
+  let clickTimer = null;
+  const REQUIRED_CLICKS = 3;
+  const CLICK_WINDOW_MS = 800;
+
+  document.addEventListener("click", function(e) {
+    clicks++;
+    if (clickTimer) clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => { clicks = 0; }, CLICK_WINDOW_MS);
+
+    if (clicks >= REQUIRED_CLICKS) {
+      clicks = 0;
+      if (clickTimer) clearTimeout(clickTimer);
+      enterAnalyzer();
+    }
+  });
+
+  function enterAnalyzer() {
+    const overlay = document.getElementById("transition");
+    overlay.classList.add("active");
+    setTimeout(() => { window.location.href = "/analyze"; }, 900);
+  }
+})();
+</script>
+
+</body>
+</html>

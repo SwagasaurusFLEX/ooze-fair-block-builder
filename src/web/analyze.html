@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ooze — Forensics</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+
+<body class="analyzer">
+
+<!-- Background fluid (subtle) -->
+<canvas id="bg-canvas"></canvas>
+
+<div class="shell">
+
+  <header class="hdr">
+    <div class="logo"><a href="/">OOZE</a></div>
+    <div class="tagline">LIFECYCLE&nbsp;TOKEN&nbsp;FORENSICS</div>
+    <div class="subtagline">bundler · cluster · wave · wash · ooze replay</div>
+  </header>
+
+  <section class="input-panel">
+    <label for="mint">SOLANA&nbsp;TOKEN&nbsp;ADDRESS</label>
+    <div class="input-row">
+      <input
+        id="mint"
+        type="text"
+        placeholder="paste mint address..."
+        autocomplete="off"
+        spellcheck="false" />
+      <button id="run-btn">ANALYZE</button>
+    </div>
+    <div class="examples">
+      try:
+      <a href="#" class="example" data-mint="6bo24bcyFELFKJJKSvNrWPHqWYxJi48PrwQ3R1fmpump">chasing that w</a>
+      ·
+      <a href="#" class="example" data-mint="5YX8Bsgm4AENU8SbsjMEeZssDcvnT5sx96mxgf69pump">HarryPotterObamaPacman8INU</a>
+    </div>
+  </section>
+
+  <section id="status" class="status hidden"></section>
+
+  <section id="report" class="report hidden"></section>
+
+  <footer class="ftr">
+    <span>OOZE · Fair Block Builder Prototype · Colosseum Frontier</span>
+  </footer>
+
+</div>
+
+<script src="/app.js"></script>
+
+</body>
+</html>
