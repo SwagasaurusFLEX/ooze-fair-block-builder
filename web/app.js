@@ -93,7 +93,7 @@ async function runAnalysis() {
     "loading minute-level price history",
     "detecting dramatic price events",
     "pulling trades at each event window",
-    "detecting coordination in each event",
+    "detecting temporal clusters in each event",
     "replaying ordering under ooze",
   ];
   let stageIdx = 0;
@@ -222,10 +222,10 @@ function renderEventsSummary(r) {
     const coordStr = !e.trades_fetched
       ? `<span style="opacity:0.4">no trades</span>`
       : e.coordination_pct >= 30
-        ? `<span style="color:var(--red);font-weight:bold">${e.coordination_pct.toFixed(0)}% coordinated</span>`
+        ? `<span style="color:var(--red);font-weight:bold">${e.coordination_pct.toFixed(0)}% clustered</span>`
         : e.coordination_pct >= 15
-          ? `<span style="color:var(--yellow)">${e.coordination_pct.toFixed(0)}% coordinated</span>`
-          : `<span style="opacity:0.55">${e.coordination_pct.toFixed(0)}% coordinated</span>`;
+          ? `<span style="color:var(--yellow)">${e.coordination_pct.toFixed(0)}% clustered</span>`
+          : `<span style="opacity:0.55">${e.coordination_pct.toFixed(0)}% clustered</span>`;
     return `<tr>
       <td class="num">${i + 1}</td>
       <td>${t}</td>
@@ -244,16 +244,17 @@ function renderEventsSummary(r) {
       <div class="section-desc">
         Events detected by scanning minute-resolution price candles.
         <b style="color:var(--red)">DRAMATIC</b> ≥50% move · <b style="color:var(--yellow)">MAJOR</b> ≥25% · MINOR = biggest moves when token was calm.
-        A wallet is "coordinated" if we detect it in any same-block cluster within the event window.
+        A trade is flagged as "clustered" if it shares a 2-second window with ≥2 other wallets trading the same direction.
+        High clustering suggests coordinated execution (Jito bundles, bot swarms, or sandwich setups) rather than organic retail demand.
       </div>
       <table class="tbl">
-        <tr><th>#</th><th>TIME</th><th>SEVERITY</th><th>TYPE</th><th style="text-align:right">Δ PRICE</th><th style="text-align:right">TRADES</th><th style="text-align:right">VOL</th><th>COORDINATION</th></tr>
+        <tr><th>#</th><th>TIME</th><th>SEVERITY</th><th>TYPE</th><th style="text-align:right">Δ PRICE</th><th style="text-align:right">TRADES</th><th style="text-align:right">VOL</th><th>CLUSTERING</th></tr>
         ${rows}
       </table>
       <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--ooze-faint);font-size:12px">
         <b>${r.total_events_detected}</b> events ·
-        <b style="color:var(--red)">${r.events_with_coordination}</b> driven by ≥30% coordination ·
-        avg <b>${r.avg_coordination_pct.toFixed(0)}%</b> coordination across all events ·
+        <b style="color:var(--red)">${r.events_with_coordination}</b> with ≥30% clustered volume ·
+        avg <b>${r.avg_coordination_pct.toFixed(0)}%</b> clustered volume across all events ·
         ${r.api_calls_used} API calls used
       </div>
     </div>
@@ -279,19 +280,20 @@ function renderEventDetail(e, num, r) {
           ${e.coordination_pct.toFixed(0)}%
         </span>
         of this ${typeLabel}
-        <b>${colorPct(e.price_change_pct)}</b> was driven by
-        <b style="color:var(--red)">${e.coordinated_wallet_count} coordinated wallets</b>
+        <b>${colorPct(e.price_change_pct)}</b> occurred as clustered trades from
+        <b style="color:var(--red)">${e.coordinated_wallet_count} wallets</b>
+        executing in tight 2-second windows
         (${e.coordinated_sol.toFixed(2)} of ${e.total_trade_sol.toFixed(2)} SOL).
       </div>
       ${e.coordination_pct >= 30 ? `
         <div style="margin-top:12px;font-size:12px;color:var(--red);letter-spacing:1px">
-          ⚠ This price move was primarily caused by coordinated bundling — not organic demand.
+          ⚠ High clustering — this price move matches the signature of coordinated execution (Jito bundles, bot swarms, or sandwich setups) rather than independent retail activity.
         </div>` : e.coordination_pct >= 15 ? `
         <div style="margin-top:12px;font-size:12px;color:var(--yellow);letter-spacing:1px">
-          ⓘ Coordination present but not dominant. Mixed signals.
+          ⓘ Moderate clustering — mixed signals. Some coordinated activity amid organic trading.
         </div>` : `
         <div style="margin-top:12px;font-size:12px;opacity:0.6;letter-spacing:1px">
-          ✓ Coordination minimal — this move looks mostly organic.
+          ✓ Low clustering — trades look largely independent and organic.
         </div>`}
     </div>
   ` : `
@@ -398,15 +400,15 @@ function renderVerdict(r) {
   if (heavy >= Math.ceil(total / 2)) {
     text = "MANUFACTURED PRICE ACTION";
     cls = "danger";
-    sub = `${heavy} of ${total} events driven by ≥30% coordination`;
+    sub = `${heavy} of ${total} events show high clustering — signature of coordinated execution`;
   } else if (heavy > 0) {
-    text = "MIXED — COORDINATION PRESENT";
+    text = "MIXED — CLUSTERING PRESENT";
     cls = "warning";
-    sub = `${heavy} of ${total} events showed heavy coordination`;
+    sub = `${heavy} of ${total} events show significant clustering`;
   } else {
     text = "MOSTLY ORGANIC";
     cls = "";
-    sub = "No events showed dominant coordination";
+    sub = "No events showed significant clustering — trades look independent";
   }
 
   return `
@@ -415,7 +417,10 @@ function renderVerdict(r) {
       <div class="text">${text}</div>
       <div style="margin-top:16px;font-size:12px;opacity:0.75">${sub}</div>
       <div style="margin-top:12px;font-size:11px;opacity:0.55;letter-spacing:1px">
-        avg coordination across events: ${r.avg_coordination_pct.toFixed(0)}% · ${r.api_calls_used} API calls used
+        avg clustered volume across events: ${r.avg_coordination_pct.toFixed(0)}% · ${r.api_calls_used} API calls used
+      </div>
+      <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--ooze-faint);font-size:10px;opacity:0.55;line-height:1.5;letter-spacing:0.5px;text-align:left">
+        <b>Methodology note:</b> "Clustered" = trades from ≥3 distinct wallets in the same direction within a 2-second window. This captures Jito bundles, bot swarms, and sandwich setups — not just atomic bundles. It's a statistical proxy for coordinated execution, not a bundle-hash forensic. Tight clustering on this scale is extremely improbable for independent retail activity.
       </div>
     </div>
   `;
@@ -429,7 +434,7 @@ function renderOozePitch(r) {
       <div style="margin-bottom:18px;font-size:11px;letter-spacing:2px;color:var(--red)">UNDER JITO TODAY:</div>
       <ul style="list-style:none;padding:0;margin:0;font-size:13px">
         <li style="padding:4px 0">— Coordinated bundles execute atomically; a wallet group can capture best prices at dramatic moments</li>
-        ${r.events_with_coordination > 0 ? `<li style="padding:4px 0">— ${r.events_with_coordination} of the ${r.total_events_detected} dramatic events on this token were driven by ≥30% coordination</li>` : ""}
+        ${r.events_with_coordination > 0 ? `<li style="padding:4px 0">— ${r.events_with_coordination} of the ${r.total_events_detected} dramatic events on this token show clustering patterns consistent with coordinated execution</li>` : ""}
       </ul>
 
       <div style="margin:20px 0 18px;font-size:11px;letter-spacing:2px;color:var(--ooze)">UNDER OOZE:</div>
