@@ -102,19 +102,19 @@ setTimeout(() => {
 
   WebGLFluid(canvas, {
     IMMEDIATE: true,
-    TRIGGER: "hover",
+    TRIGGER: "click",
 
     SIM_RESOLUTION: 128,
     DYE_RESOLUTION: 1024,
 
     DENSITY_DISSIPATION: 0.975,
-    VELOCITY_DISSIPATION: 0.98,
+    VELOCITY_DISSIPATION: 0.92,
     PRESSURE: 0.15,
     PRESSURE_ITERATIONS: 50,
     CURL: 0,
 
-    SPLAT_RADIUS: 0.25,
-    SPLAT_FORCE: 3000,
+    SPLAT_RADIUS: 0.15,
+    SPLAT_FORCE: 8000,
 
     COLORFUL: false,
     PAUSED: false,
@@ -141,9 +141,9 @@ setTimeout(() => {
   let taps = 0;
   let tapTimer = null;
   const REQUIRED_TAPS = 3;
-  const TAP_WINDOW_MS = 800;
+  const TAP_WINDOW_MS = 1000;
 
-  // pointerdown fires for both mouse clicks AND touch taps, once per event
+  // pointerdown fires once for both mouse clicks AND touch taps
   document.addEventListener("pointerdown", function(e) {
     taps++;
     if (tapTimer) clearTimeout(tapTimer);
