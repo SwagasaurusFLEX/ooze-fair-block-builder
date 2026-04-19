@@ -92,7 +92,7 @@ canvas {
 
 <canvas id="c"></canvas>
 <div class="info"></div>
-<div class="hint">TRIPLE&nbsp;CLICK&nbsp;TO&nbsp;ENTER</div>
+<div class="hint">TRIPLE&nbsp;TAP&nbsp;TO&nbsp;ENTER</div>
 <div class="transition" id="transition"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/webgl-fluid@0.3.0/dist/webgl-fluid.umd.min.js"></script>
@@ -102,19 +102,19 @@ setTimeout(() => {
 
   WebGLFluid(canvas, {
     IMMEDIATE: true,
-    TRIGGER: "click",
+    TRIGGER: "hover",
 
     SIM_RESOLUTION: 128,
     DYE_RESOLUTION: 1024,
 
     DENSITY_DISSIPATION: 0.975,
-    VELOCITY_DISSIPATION: 0.92,
+    VELOCITY_DISSIPATION: 0.98,
     PRESSURE: 0.15,
     PRESSURE_ITERATIONS: 50,
     CURL: 0,
 
-    SPLAT_RADIUS: 0.15,
-    SPLAT_FORCE: 8000,
+    SPLAT_RADIUS: 0.25,
+    SPLAT_FORCE: 3000,
 
     COLORFUL: false,
     PAUSED: false,
@@ -136,21 +136,22 @@ setTimeout(() => {
   });
 }, 100);
 
-// Triple-click to enter analyzer
+// Triple-tap/click to enter analyzer (works on desktop and mobile)
 (function() {
-  let clicks = 0;
-  let clickTimer = null;
-  const REQUIRED_CLICKS = 3;
-  const CLICK_WINDOW_MS = 800;
+  let taps = 0;
+  let tapTimer = null;
+  const REQUIRED_TAPS = 3;
+  const TAP_WINDOW_MS = 800;
 
-  document.addEventListener("click", function(e) {
-    clicks++;
-    if (clickTimer) clearTimeout(clickTimer);
-    clickTimer = setTimeout(() => { clicks = 0; }, CLICK_WINDOW_MS);
+  // pointerdown fires for both mouse clicks AND touch taps, once per event
+  document.addEventListener("pointerdown", function(e) {
+    taps++;
+    if (tapTimer) clearTimeout(tapTimer);
+    tapTimer = setTimeout(() => { taps = 0; }, TAP_WINDOW_MS);
 
-    if (clicks >= REQUIRED_CLICKS) {
-      clicks = 0;
-      if (clickTimer) clearTimeout(clickTimer);
+    if (taps >= REQUIRED_TAPS) {
+      taps = 0;
+      if (tapTimer) clearTimeout(tapTimer);
       enterAnalyzer();
     }
   });
