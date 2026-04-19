@@ -145,19 +145,22 @@ function renderReport(r) {
 // ───── Vitals ─────
 function renderVitals(r) {
   const t = r.overview.token;
-  const p = r.primary_pool;
-  const price = p.price.usd ?? 0;
-  const mcap = p.market_cap.usd;
+  const p = r.primary_pool || {};
+  const price = p.price?.usd ?? 0;
+  // Backend uses camelCase for renamed fields: marketCap, tokenSupply
+  const mcap = p.marketCap?.usd ?? p.market_cap?.usd ?? 0;
+  const liquidity = p.liquidity?.usd ?? 0;
+  const market = p.market ?? "unknown";
   const athMult = r.ath_mcap_usd > 0 && mcap > 0 ? (r.ath_mcap_usd / mcap) : null;
 
   const events = r.overview.events || {};
   const h1 = events.h1?.pct, h6 = events.h6?.pct, h24 = events.h24?.pct;
 
-  const score = r.overview.risk.score ?? 0;
+  const score = r.overview.risk?.score ?? 0;
   const scoreClass = score >= 7 ? "red" : score >= 4 ? "yellow" : "";
-  const top10 = r.overview.risk.top10 ?? 0;
+  const top10 = r.overview.risk?.top10 ?? 0;
 
-  const risks = (r.overview.risk.risks || []).map(rk => `
+  const risks = (r.overview.risk?.risks || []).map(rk => `
     <div class="risk-flag ${esc(rk.level)}">
       <span>${rk.level === "danger" ? "⛔" : "⚠"}</span>
       <span><b>${esc(rk.name)}</b>: ${esc(rk.description)}</span>
@@ -178,10 +181,10 @@ function renderVitals(r) {
       <div class="kv"><div class="k">MARKET CAP (NOW)</div><div class="v">${fmtMoney(mcap)}</div></div>
       ${r.ath_mcap_usd > 0 ? `
       <div class="kv"><div class="k">ATH MARKET CAP</div><div class="v red">${fmtMoney(r.ath_mcap_usd)}${athMult ? ` <span style="opacity:0.6;font-weight:normal">(${athMult.toFixed(1)}x current)</span>` : ""}</div></div>` : ""}
-      <div class="kv"><div class="k">LIQUIDITY</div><div class="v">${fmtMoney(p.liquidity.usd)}</div></div>
+      <div class="kv"><div class="k">LIQUIDITY</div><div class="v">${fmtMoney(liquidity)}</div></div>
       <div class="kv"><div class="k">AGE</div><div class="v">${fmtAge(r.age_hours)}</div></div>
       <div class="kv"><div class="k">HOLDERS</div><div class="v">${fmtNum(r.overview.holders)}</div></div>
-      <div class="kv"><div class="k">PRIMARY VENUE</div><div class="v">${esc(p.market)}</div></div>
+      <div class="kv"><div class="k">PRIMARY VENUE</div><div class="v">${esc(market)}</div></div>
 
       <div class="kv"><div class="k">TRANSACTIONS</div><div class="v">${fmtNum(r.overview.txns)} (<span style="color:#66ff99">${fmtNum(r.overview.buys)} buys</span> / <span style="color:var(--red)">${fmtNum(r.overview.sells)} sells</span>)</div></div>
 
@@ -194,7 +197,7 @@ function renderVitals(r) {
       <div class="kv"><div class="k">RISK SCORE</div><div class="v ${scoreClass}">${score}/10</div></div>
       <div class="kv"><div class="k">TOP 10 HOLD</div><div class="v ${top10 > 50 ? "red" : "yellow"}">${top10.toFixed(2)}%</div></div>
 
-      ${r.overview.risk.rugged ? `<div class="kv"><div class="k">STATUS</div><div class="v red">RUGGED</div></div>` : ""}
+      ${r.overview.risk?.rugged ? `<div class="kv"><div class="k">STATUS</div><div class="v red">RUGGED</div></div>` : ""}
 
       ${risks ? `<div style="margin-top:16px;font-size:11px;opacity:0.7;letter-spacing:2px">RISK FLAGS</div><div class="risk-flags">${risks}</div>` : ""}
     </div>

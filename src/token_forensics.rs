@@ -306,14 +306,31 @@ async fn fetch_trades_page(
         Some(c) => format!("https://data.solanatracker.io/trades/{}?cursor={}", mint, c),
         None => format!("https://data.solanatracker.io/trades/{}", mint),
     };
-    let r = client.get(&url).header("x-api-key", key).send().await?;
-    let s = r.status();
-    let body = r.text().await?;
-    if !s.is_success() {
+
+    // Retry loop for 429 rate limits
+    let max_retries = 3;
+    for attempt in 0..max_retries {
+        let r = client.get(&url).header("x-api-key", key).send().await?;
+        let s = r.status();
+        let body = r.text().await?;
+
+        if s.is_success() {
+            return serde_json::from_str(&body)
+                .map_err(|e| format!("Trades parse: {} — {}", e, &body[..300.min(body.len())]).into());
+        }
+
+        // On rate limit, back off exponentially and retry
+        if s.as_u16() == 429 && attempt < max_retries - 1 {
+            let backoff_ms = 3000 * (attempt + 1) as u64; // 3s, 6s, 9s
+            eprintln!("         ⏳ rate limited, backing off {}ms (attempt {}/{})", backoff_ms, attempt + 1, max_retries);
+            tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
+            continue;
+        }
+
         return Err(format!("Trades ({}): {}", s, &body[..200.min(body.len())]).into());
     }
-    serde_json::from_str(&body)
-        .map_err(|e| format!("Trades parse: {} — {}", e, &body[..300.min(body.len())]).into())
+
+    Err("Trades: exhausted retries".into())
 }
 
 fn raw_to_trade(t: &RawTrade) -> Option<Trade> {
@@ -334,87 +351,85 @@ fn raw_to_trade(t: &RawTrade) -> Option<Trade> {
 // EVENT DETECTION FROM CANDLES
 // ══════════════════════════════════════════════════════════════════════
 //
-// Scan candles (minute-resolution) looking for dramatic price moves.
-// Single candle: move within one minute.
-// Two-candle: cumulative move across 2 consecutive minutes.
-// Categorize by magnitude; rank; keep top N.
+// Three event types:
+// 1. Spike events — single candle with dramatic wick movement
+// 2. 2-candle events — dramatic move across 2 consecutive candles
+// 3. Trend events — cumulative move over 5-30 min windows (catches slow bleeds)
+//
+// Pumps and dumps are detected separately so asymmetric math doesn't
+// let pumps eclipse dumps in the rankings.
 
-const DRAMATIC_THRESHOLD: f64 = 50.0;  // % change
-const MAJOR_THRESHOLD: f64 = 25.0;
-const MIN_CANDLE_VOLUME: f64 = 0.1;     // ignore tiny-volume candles to avoid noise
-const TOP_N_EVENTS: usize = 5;
+const DRAMATIC_THRESHOLD: f64 = 30.0;   // lowered from 50 per user feedback
+const MAJOR_THRESHOLD: f64 = 15.0;       // lowered from 25
+const MIN_CANDLE_VOLUME: f64 = 0.1;
+const TOP_PUMPS: usize = 3;
+const TOP_DUMPS: usize = 3;
+const TREND_MAX_CANDLES: usize = 30;     // up to 30-minute trend window
+
+fn classify_severity(abs: f64) -> &'static str {
+    if abs >= DRAMATIC_THRESHOLD { "DRAMATIC" }
+    else if abs >= MAJOR_THRESHOLD { "MAJOR" }
+    else { "MINOR" }
+}
+
+fn make_event(
+    event_type: &str, start_ms: u64, end_ms: u64, candle_count: u32,
+    p_start: f64, p_end: f64, p_low: f64, p_high: f64,
+    pct: f64, vol_sol: f64,
+) -> DramaticEvent {
+    let abs = pct.abs();
+    let signed = if event_type == "DUMP" { -abs } else { abs };
+    DramaticEvent {
+        event_type: event_type.to_string(),
+        severity: classify_severity(abs).to_string(),
+        start_time_ms: start_ms,
+        end_time_ms: end_ms,
+        candle_count,
+        price_start: p_start,
+        price_end: p_end,
+        price_low: p_low,
+        price_high: p_high,
+        price_change_pct: signed,
+        abs_magnitude: abs,
+        candle_volume_sol: vol_sol,
+        trades: Vec::new(),
+        clusters: Vec::new(),
+        unique_wallets: 0,
+        coordinated_wallet_count: 0,
+        coordinated_wallets: Vec::new(),
+        total_trade_sol: 0.0,
+        coordinated_sol: 0.0,
+        coordination_pct: 0.0,
+        trades_fetched: false,
+        ooze_replay: None,
+    }
+}
 
 fn detect_events(candles: &[Candle]) -> Vec<DramaticEvent> {
     if candles.is_empty() { return Vec::new(); }
 
-    let mut events: Vec<DramaticEvent> = Vec::new();
+    let mut pumps: Vec<DramaticEvent> = Vec::new();
+    let mut dumps: Vec<DramaticEvent> = Vec::new();
 
-    // Scan single candles
+    // ── Single-candle pumps and dumps (wick extremes) ──
     for c in candles {
         if c.open <= 0.0 || c.volume < MIN_CANDLE_VOLUME { continue; }
         let up_pct = (c.high - c.open) / c.open * 100.0;
         let down_pct = (c.open - c.low) / c.open * 100.0;
+        let start_ms = c.time * 1000;
+        let end_ms = (c.time + 60) * 1000;
 
-        // Single-candle event: use the dominant direction
-        let close_dir_pct = (c.close - c.open) / c.open * 100.0;
-
-        // Consider both the wick extremes and the close; use the bigger magnitude
-        let event_pct;
-        let event_type;
-        let p_start;
-        let p_end;
-        if up_pct >= down_pct {
-            event_pct = up_pct;
-            event_type = "PUMP";
-            p_start = c.open;
-            p_end = c.high;
-        } else {
-            event_pct = down_pct;
-            event_type = "DUMP";
-            p_start = c.open;
-            p_end = c.low;
+        if up_pct >= MAJOR_THRESHOLD {
+            pumps.push(make_event("PUMP", start_ms, end_ms, 1,
+                c.open, c.high, c.low, c.high, up_pct, c.volume));
         }
-
-        let abs = event_pct.abs();
-        let severity = if abs >= DRAMATIC_THRESHOLD { "DRAMATIC" }
-            else if abs >= MAJOR_THRESHOLD { "MAJOR" }
-            else { "MINOR" };
-
-        let signed = if event_type == "DUMP" { -abs } else { abs };
-
-        // Filter out truly noisy tiny candles
-        if abs < 5.0 { continue; }
-
-        events.push(DramaticEvent {
-            event_type: event_type.to_string(),
-            severity: severity.to_string(),
-            start_time_ms: c.time * 1000,
-            end_time_ms: (c.time + 60) * 1000,
-            candle_count: 1,
-            price_start: p_start,
-            price_end: p_end,
-            price_low: c.low,
-            price_high: c.high,
-            price_change_pct: signed,
-            abs_magnitude: abs,
-            candle_volume_sol: c.volume,
-            trades: Vec::new(),
-            clusters: Vec::new(),
-            unique_wallets: 0,
-            coordinated_wallet_count: 0,
-            coordinated_wallets: Vec::new(),
-            total_trade_sol: 0.0,
-            coordinated_sol: 0.0,
-            coordination_pct: 0.0,
-            trades_fetched: false,
-            ooze_replay: None,
-            // unused close_dir_pct retained for future:
-            // note: removing to keep struct clean
-        });
-        let _ = close_dir_pct; // suppress warning
+        if down_pct >= MAJOR_THRESHOLD {
+            dumps.push(make_event("DUMP", start_ms, end_ms, 1,
+                c.open, c.low, c.low, c.high, down_pct, c.volume));
+        }
     }
 
-    // Scan 2-candle windows (sum of movements in same direction)
+    // ── 2-candle pumps and dumps ──
     for i in 0..candles.len().saturating_sub(1) {
         let a = &candles[i];
         let b = &candles[i + 1];
@@ -423,84 +438,127 @@ fn detect_events(candles: &[Candle]) -> Vec<DramaticEvent> {
 
         let combined_high = a.high.max(b.high);
         let combined_low = a.low.min(b.low);
-        let p_open = a.open;
+        let up_pct = (combined_high - a.open) / a.open * 100.0;
+        let down_pct = (a.open - combined_low) / a.open * 100.0;
+        let start_ms = a.time * 1000;
+        let end_ms = (b.time + 60) * 1000;
+        let vol = a.volume + b.volume;
 
-        let up_pct = (combined_high - p_open) / p_open * 100.0;
-        let down_pct = (p_open - combined_low) / p_open * 100.0;
-
-        let (event_pct, event_type, p_end) = if up_pct >= down_pct {
-            (up_pct, "PUMP", combined_high)
-        } else {
-            (down_pct, "DUMP", combined_low)
-        };
-
-        let abs = event_pct.abs();
-        let severity = if abs >= DRAMATIC_THRESHOLD { "DRAMATIC" }
-            else if abs >= MAJOR_THRESHOLD { "MAJOR" }
-            else { "MINOR" };
-
-        if abs < 10.0 { continue; } // 2-candle windows need at least 10% to be interesting
-
-        let signed = if event_type == "DUMP" { -abs } else { abs };
-
-        events.push(DramaticEvent {
-            event_type: event_type.to_string(),
-            severity: severity.to_string(),
-            start_time_ms: a.time * 1000,
-            end_time_ms: (b.time + 60) * 1000,
-            candle_count: 2,
-            price_start: p_open,
-            price_end: p_end,
-            price_low: combined_low,
-            price_high: combined_high,
-            price_change_pct: signed,
-            abs_magnitude: abs,
-            candle_volume_sol: a.volume + b.volume,
-            trades: Vec::new(),
-            clusters: Vec::new(),
-            unique_wallets: 0,
-            coordinated_wallet_count: 0,
-            coordinated_wallets: Vec::new(),
-            total_trade_sol: 0.0,
-            coordinated_sol: 0.0,
-            coordination_pct: 0.0,
-            trades_fetched: false,
-            ooze_replay: None,
-        });
-    }
-
-    // Sort by absolute magnitude descending
-    events.sort_by(|a, b| b.abs_magnitude.partial_cmp(&a.abs_magnitude).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Deduplicate overlapping events — keep the one with largest magnitude
-    let mut deduped: Vec<DramaticEvent> = Vec::new();
-    for e in events {
-        let overlaps = deduped.iter().any(|k| {
-            // Windows overlap if they share time
-            e.start_time_ms < k.end_time_ms && e.end_time_ms > k.start_time_ms
-        });
-        if !overlaps {
-            deduped.push(e);
+        if up_pct >= MAJOR_THRESHOLD {
+            pumps.push(make_event("PUMP", start_ms, end_ms, 2,
+                a.open, combined_high, combined_low, combined_high, up_pct, vol));
+        }
+        if down_pct >= MAJOR_THRESHOLD {
+            dumps.push(make_event("DUMP", start_ms, end_ms, 2,
+                a.open, combined_low, combined_low, combined_high, down_pct, vol));
         }
     }
 
-    // Cap at top N
-    deduped.truncate(TOP_N_EVENTS);
+    // ── Trend events: 5–30 min rolling windows catching slow bleeds ──
+    // For each starting candle, scan forward until cumulative move hits threshold
+    // or we exceed the max window.
+    for start_idx in 0..candles.len() {
+        let start = &candles[start_idx];
+        if start.open <= 0.0 { continue; }
+        let mut best_up = (0.0_f64, start_idx, start_idx);    // (pct, end_idx, vol_accumulator_idx)
+        let mut best_down = (0.0_f64, start_idx, start_idx);
+        let max_end = (start_idx + TREND_MAX_CANDLES).min(candles.len() - 1);
 
-    // Re-sort chronologically for display
-    deduped.sort_by_key(|e| e.start_time_ms);
+        for end_idx in (start_idx + 4)..=max_end {
+            let window_high = candles[start_idx..=end_idx].iter()
+                .map(|c| c.high).fold(f64::NEG_INFINITY, f64::max);
+            let window_low = candles[start_idx..=end_idx].iter()
+                .map(|c| c.low).fold(f64::INFINITY, f64::min);
+            let up_pct = (window_high - start.open) / start.open * 100.0;
+            let down_pct = (start.open - window_low) / start.open * 100.0;
+            if up_pct > best_up.0 { best_up = (up_pct, end_idx, end_idx); }
+            if down_pct > best_down.0 { best_down = (down_pct, end_idx, end_idx); }
+        }
 
-    deduped
+        if best_up.0 >= DRAMATIC_THRESHOLD {
+            let end = &candles[best_up.1];
+            let vol: f64 = candles[start_idx..=best_up.1].iter().map(|c| c.volume).sum();
+            let window_high = candles[start_idx..=best_up.1].iter()
+                .map(|c| c.high).fold(f64::NEG_INFINITY, f64::max);
+            let window_low = candles[start_idx..=best_up.1].iter()
+                .map(|c| c.low).fold(f64::INFINITY, f64::min);
+            pumps.push(make_event("PUMP", start.time * 1000, (end.time + 60) * 1000,
+                (best_up.1 - start_idx + 1) as u32,
+                start.open, window_high, window_low, window_high, best_up.0, vol));
+        }
+        if best_down.0 >= DRAMATIC_THRESHOLD {
+            let end = &candles[best_down.1];
+            let vol: f64 = candles[start_idx..=best_down.1].iter().map(|c| c.volume).sum();
+            let window_high = candles[start_idx..=best_down.1].iter()
+                .map(|c| c.high).fold(f64::NEG_INFINITY, f64::max);
+            let window_low = candles[start_idx..=best_down.1].iter()
+                .map(|c| c.low).fold(f64::INFINITY, f64::min);
+            dumps.push(make_event("DUMP", start.time * 1000, (end.time + 60) * 1000,
+                (best_down.1 - start_idx + 1) as u32,
+                start.open, window_low, window_low, window_high, best_down.0, vol));
+        }
+    }
+
+    // Sort each by magnitude
+    pumps.sort_by(|a, b| b.abs_magnitude.partial_cmp(&a.abs_magnitude).unwrap_or(std::cmp::Ordering::Equal));
+    dumps.sort_by(|a, b| b.abs_magnitude.partial_cmp(&a.abs_magnitude).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Dedup within each direction by time-overlap, keeping highest-magnitude
+    fn dedup_overlapping(events: Vec<DramaticEvent>) -> Vec<DramaticEvent> {
+        let mut kept: Vec<DramaticEvent> = Vec::new();
+        for e in events {
+            let overlaps = kept.iter().any(|k| {
+                e.start_time_ms < k.end_time_ms && e.end_time_ms > k.start_time_ms
+            });
+            if !overlaps { kept.push(e); }
+        }
+        kept
+    }
+
+    let pumps = dedup_overlapping(pumps);
+    let dumps = dedup_overlapping(dumps);
+
+    // Take top N of each
+    let mut result: Vec<DramaticEvent> = pumps.into_iter().take(TOP_PUMPS).collect();
+    result.extend(dumps.into_iter().take(TOP_DUMPS));
+
+    // If we have nothing (very calm token), add the biggest candles even if below threshold
+    if result.is_empty() {
+        // Find biggest up and down moves regardless of threshold
+        let mut biggest_up: Option<DramaticEvent> = None;
+        let mut biggest_down: Option<DramaticEvent> = None;
+        for c in candles {
+            if c.open <= 0.0 { continue; }
+            let up = (c.high - c.open) / c.open * 100.0;
+            let down = (c.open - c.low) / c.open * 100.0;
+            if biggest_up.as_ref().map(|e| up > e.abs_magnitude).unwrap_or(up > 0.0) {
+                biggest_up = Some(make_event("PUMP", c.time * 1000, (c.time + 60) * 1000, 1,
+                    c.open, c.high, c.low, c.high, up, c.volume));
+            }
+            if biggest_down.as_ref().map(|e| down > e.abs_magnitude).unwrap_or(down > 0.0) {
+                biggest_down = Some(make_event("DUMP", c.time * 1000, (c.time + 60) * 1000, 1,
+                    c.open, c.low, c.low, c.high, down, c.volume));
+            }
+        }
+        if let Some(mut e) = biggest_up { e.severity = "MINOR".into(); result.push(e); }
+        if let Some(mut e) = biggest_down { e.severity = "MINOR".into(); result.push(e); }
+    }
+
+    // Final chronological sort for display
+    result.sort_by_key(|e| e.start_time_ms);
+
+    result
 }
 
 // ══════════════════════════════════════════════════════════════════════
 // FETCH TRADES FOR A SPECIFIC EVENT WINDOW
 // ══════════════════════════════════════════════════════════════════════
 //
-// Paginate backward through /trades/{mint} until we pass the event's start_time.
-// Keep only trades whose timestamp falls in [start - buffer, end + buffer].
+// CRITICAL: Solana Tracker's /trades endpoint cursor is a unix timestamp
+// in MILLISECONDS. By passing cursor = event_end_time_ms, we jump DIRECTLY
+// to trades at that moment — no need to paginate through thousands of newer trades.
 
-const TRADE_FETCH_BUFFER_MS: u64 = 30_000; // 30 sec buffer on each side
+const TRADE_FETCH_BUFFER_MS: u64 = 450_000; // 7.5 minutes on each side = 15 min window
 
 async fn fetch_trades_for_window(
     client: &Client, key: &str, mint: &str,
@@ -509,10 +567,11 @@ async fn fetch_trades_for_window(
     let window_start = start_time_ms.saturating_sub(TRADE_FETCH_BUFFER_MS);
     let window_end = end_time_ms + TRADE_FETCH_BUFFER_MS;
 
+    // Cursor is a millisecond timestamp — start at window_end to jump directly there.
     let mut collected: Vec<Trade> = Vec::new();
-    let mut cursor: Option<u64> = None;
+    let mut cursor: Option<u64> = Some(window_end);
     let mut calls = 0u32;
-    let max_pages = 15; // safety cap — should almost never hit this
+    let max_pages = 10;
 
     for _ in 0..max_pages {
         let resp = fetch_trades_page(client, key, mint, cursor).await?;
@@ -520,7 +579,7 @@ async fn fetch_trades_for_window(
 
         if resp.trades.is_empty() { break; }
 
-        // Find oldest trade in this page
+        // Find oldest trade in this page (milliseconds)
         let oldest_in_page = resp.trades.iter().filter_map(|t| t.time).min().unwrap_or(0);
 
         // Collect matching trades
@@ -542,11 +601,10 @@ async fn fetch_trades_for_window(
         }
         cursor = resp.next_cursor;
 
-        // Rate limit respect
-        tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+        // Rate limit: free tier is 1 rps — use 1500ms to be safe
+        tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
     }
 
-    // Sort chronologically
     collected.sort_by_key(|t| t.timestamp_ms);
 
     Ok((collected, calls))
@@ -732,13 +790,13 @@ pub async fn analyze_token(api_key: &str, mint: &str) -> Result<ForensicsReport,
     let overview = fetch_overview(&client, api_key, mint).await?;
     api_calls += 1;
     println!("      ✓ {} ({})", overview.token.name, overview.token.symbol);
-    tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
     println!("  [2] Top traders by profit...");
     let traders = fetch_top_traders(&client, api_key, mint).await?;
     api_calls += 1;
     println!("      ✓ {} profiteers", traders.len());
-    tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
     // OHLCV — use 1m candles for tokens under 7 days, 5m for older
     let now_s = std::time::SystemTime::now()
@@ -754,7 +812,7 @@ pub async fn analyze_token(api_key: &str, mint: &str) -> Result<ForensicsReport,
         .unwrap_or_default();
     api_calls += 1;
     println!("      ✓ {} candles", candles.len());
-    tokio::time::sleep(tokio::time::Duration::from_millis(1200)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
 
     let ath_candle = candles.iter()
         .max_by(|a, b| a.high.partial_cmp(&b.high).unwrap_or(std::cmp::Ordering::Equal))
@@ -770,10 +828,11 @@ pub async fn analyze_token(api_key: &str, mint: &str) -> Result<ForensicsReport,
 
     // Fetch trades for each event and analyze coordination
     println!("  [5] Analyzing trades at each event...");
+    let event_count = events.len();
     for (idx, event) in events.iter_mut().enumerate() {
         println!(
             "      Event {}/{}: {} {:+.1}% at {:.1}h",
-            idx + 1, TOP_N_EVENTS,
+            idx + 1, event_count,
             event.event_type, event.price_change_pct,
             (event.start_time_ms / 1000).saturating_sub(created_s) as f64 / 3600.0,
         );

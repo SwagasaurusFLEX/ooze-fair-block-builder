@@ -62,7 +62,8 @@ async fn main() {
         .layer(cors);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    println!("OOZE web server listening on http://{}", addr);
+    println!("OOZE web server listening on http://localhost:3000");
+    println!("   Bind address: http://{}", addr);
     println!("   Static files:  {}", static_dir);
     println!("   API endpoint:  POST http://{}/api/analyze", addr);
 
