@@ -9,6 +9,21 @@
 
 <body class="analyzer">
 
+<!-- SVG filter defs (for goo loader effect) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <filter id="goo-filter">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
+      <feColorMatrix in="blur" mode="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+                0 0 0 18 -7" result="goo" />
+      <feBlend in="SourceGraphic" in2="goo" />
+    </filter>
+  </defs>
+</svg>
+
 <!-- Background fluid (subtle) -->
 <canvas id="bg-canvas"></canvas>
 
@@ -41,7 +56,7 @@
     <div class="ftr-main">OOZE · Fair Block Builder Prototype · Colosseum Frontier</div>
     <div class="ftr-link">
       <a href="https://solana-validator-dashboard-7jlzowd9tcm93cafoend66.streamlit.app/" target="_blank" rel="noopener">
-        Further reading: The Case Against Centralization - Solana Validator Economics&nbsp;→
+        Further reading: The Case Against Centralization — Solana Validator Economics&nbsp;→
       </a>
     </div>
   </footer>

@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 const API_BASE = window.location.origin;
+const TOTAL_SUPPLY_SCALED = 1_000_000_000; // 1B tokens (standard pump.fun supply)
 
 // ───── Helpers ─────
 const fmtMoney = n => {
@@ -63,10 +64,23 @@ document.querySelectorAll(".example").forEach(a => {
 });
 
 // ───── Status helpers ─────
+const GOO_LOADER = `
+<div class="goo-wrap" aria-hidden="true">
+  <div class="goo-scene">
+    <div class="goo-blob goo-blob-big"></div>
+    <div class="goo-blob goo-satellite"></div>
+  </div>
+</div>
+`;
+
 function setStatus(msg, isError=false) {
   $status.className = `status ${isError ? "error" : ""}`;
   $status.classList.remove("hidden");
-  $status.innerHTML = isError ? msg : `<span class="spinner">▸</span>${msg}`;
+  if (isError) {
+    $status.innerHTML = msg;
+  } else {
+    $status.innerHTML = `${GOO_LOADER}<div class="goo-msg">${msg}</div>`;
+  }
 }
 function hideStatus() { $status.classList.add("hidden"); }
 function hideReport() { $report.classList.add("hidden"); $report.innerHTML = ""; }
@@ -140,6 +154,23 @@ function renderReport(r) {
   $report.innerHTML = html;
   $report.classList.remove("hidden");
   $report.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // Wire up cluster-toggle buttons
+  $report.querySelectorAll(".cluster-toggle").forEach(btn => {
+    const expandedLabel = btn.dataset.expanded || btn.innerHTML.replace("▼ SHOW", "▲ HIDE").replace(" MORE", "");
+    const collapsedLabel = btn.innerHTML;
+    btn.dataset.expanded = expandedLabel;
+    btn.dataset.collapsed = collapsedLabel;
+
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.target;
+      const tbody = document.getElementById(targetId);
+      if (!tbody) return;
+      const isHidden = tbody.style.display === "none";
+      tbody.style.display = isHidden ? "" : "none";
+      btn.innerHTML = isHidden ? btn.dataset.expanded : btn.dataset.collapsed;
+    });
+  });
 }
 
 // ───── Vitals ─────
@@ -302,20 +333,53 @@ function renderEventDetail(e, num, r) {
     </div>
   `;
 
-  const clusters = e.clusters.length > 0 ? `
-    <div style="margin-top:16px;font-size:11px;letter-spacing:2px;opacity:0.65">CLUSTERS</div>
-    <table class="tbl">
-      <tr><th>#</th><th>DIR</th><th style="text-align:right">WALLETS</th><th style="text-align:right">SOL</th></tr>
-      ${e.clusters.map((cl, ci) => `
-        <tr>
-          <td class="num">${ci + 1}</td>
-          <td><span style="color:${cl.direction === "buy" ? "#66ff99" : "var(--red)"}">${cl.direction.toUpperCase()}</span></td>
-          <td class="num">${cl.wallets.length}</td>
-          <td class="num">${cl.total_sol.toFixed(2)}</td>
-        </tr>
-      `).join("")}
-    </table>
-  ` : "";
+  // Sort clusters by volume (biggest first), show top 10 collapsed with expand toggle
+  let clusters = "";
+  if (e.clusters.length > 0) {
+    const sortedClusters = [...e.clusters]
+      .map((cl, origIdx) => ({ cl, origIdx }))
+      .sort((a, b) => b.cl.total_sol - a.cl.total_sol);
+
+    const TOP_N = 10;
+    const topClusters = sortedClusters.slice(0, TOP_N);
+    const restClusters = sortedClusters.slice(TOP_N);
+    const hasMore = restClusters.length > 0;
+    const clusterSectionId = `clusters-event-${num}`;
+
+    const renderRow = ({ cl, origIdx }, displayIdx) => `
+      <tr>
+        <td class="num">${displayIdx + 1}</td>
+        <td><span style="color:${cl.direction === "buy" ? "#66ff99" : "var(--red)"}">${cl.direction.toUpperCase()}</span></td>
+        <td class="num">${cl.wallets.length}</td>
+        <td class="num">${cl.total_sol.toFixed(2)}</td>
+      </tr>
+    `;
+
+    clusters = `
+      <div style="margin-top:16px;font-size:11px;letter-spacing:2px;opacity:0.65">
+        CLUSTERS <span style="opacity:0.5">(top ${Math.min(TOP_N, e.clusters.length)} of ${e.clusters.length}, by volume)</span>
+      </div>
+      <table class="tbl">
+        <tr><th>#</th><th>DIR</th><th style="text-align:right">WALLETS</th><th style="text-align:right">SOL</th></tr>
+        ${topClusters.map((c, i) => renderRow(c, i)).join("")}
+        ${hasMore ? `
+          <tbody id="${clusterSectionId}" style="display:none">
+            ${restClusters.map((c, i) => renderRow(c, i + TOP_N)).join("")}
+          </tbody>
+        ` : ""}
+      </table>
+      ${hasMore ? `
+        <div style="text-align:center;margin-top:10px">
+          <button
+            class="cluster-toggle"
+            data-target="${clusterSectionId}"
+            style="background:transparent;border:1px solid var(--ooze-dim);color:var(--ooze);font-family:monospace;font-size:11px;letter-spacing:2px;padding:6px 14px;cursor:pointer;opacity:0.75">
+            ▼ SHOW ${restClusters.length} MORE
+          </button>
+        </div>
+      ` : ""}
+    `;
+  }
 
   const replay = e.ooze_replay ? renderEventReplay(e) : "";
 
@@ -349,38 +413,110 @@ function renderEventReplay(e) {
 
   const adjusted = Math.max(0, e.abs_magnitude - rep.price_impact_reduction);
 
+  // Calculate aggregate dilution across top wallets (more meaningful than just #1)
+  const comps = rep.wallet_comparisons || [];
+  const topJitoSum = comps.reduce((s, w) => s + w.jito_tokens, 0);
+  const topOozeSum = comps.reduce((s, w) => s + w.ooze_tokens, 0);
+  const aggregateReduction = topJitoSum > 0 ? ((1 - topOozeSum / topJitoSum) * 100) : 0;
+  const diluted = comps.filter(w => w.jito_tokens > 0 && (w.ooze_tokens / w.jito_tokens) < 0.99);
+  const dilutedCount = diluted.length;
+
+  // Build top wallets comparison table
+  const walletsTable = comps.length > 0 ? `
+    <div style="margin-top:20px">
+      <div style="font-size:11px;letter-spacing:2px;opacity:0.65;margin-bottom:8px">
+        TOP WALLETS — BEFORE &amp; AFTER
+      </div>
+      <table class="tbl">
+        <tr>
+          <th>WALLET</th>
+          <th style="text-align:right">JITO (today)</th>
+          <th style="text-align:right">OOZE (modeled)</th>
+          <th style="text-align:right">Δ</th>
+        </tr>
+        ${comps.slice(0, 5).map(w => {
+          const pct = w.jito_tokens > 0 ? ((w.ooze_tokens / w.jito_tokens - 1) * 100) : 0;
+          const deltaColor = pct < -5 ? "var(--red)" : pct < -1 ? "var(--yellow)" : "";
+          return `
+            <tr>
+              <td>${short(w.wallet, 8)}</td>
+              <td class="num">${fmtNum(w.jito_tokens)}</td>
+              <td class="num">${fmtNum(w.ooze_tokens)}</td>
+              <td class="num" style="color:${deltaColor}">${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%</td>
+            </tr>
+          `;
+        }).join("")}
+      </table>
+    </div>
+  ` : "";
+
   return `
     <div style="margin-top:22px;border-top:1px solid var(--ooze-dim);padding-top:18px">
-      <div style="font-size:13px;letter-spacing:2px;color:var(--ooze);font-weight:bold;margin-bottom:14px">
-        ▶ OOZE ORDERING REPLAY
+      <div style="font-size:13px;letter-spacing:2px;color:var(--ooze);font-weight:bold;margin-bottom:10px">
+        ▶ OOZE ORDERING SIMULATION
       </div>
+
+      <div style="font-size:12px;opacity:0.75;line-height:1.6;margin-bottom:18px">
+        <b>What this shows:</b> How the top 5 accumulating wallets would fare if this block had used
+        Ooze's randomized ordering instead of Jito's bundle atomicity.
+        Under Jito, bundled wallets land atomically and capture full intended volume.
+        Under Ooze, wallets in the same 2-second window get randomized positions — later positions pay worse slippage.
+        <br><br>
+        <b>Note:</b> The single biggest accumulator is often a solo operator with no competing wallets in its windows —
+        Ooze can't dilute a wallet operating alone. The real impact is on the <i>next tier</i> of competing wallets
+        that were bundling together.
+      </div>
+
       <div class="rp-compare">
         <div class="rp-side jito">
-          <h4>JITO ACTUAL</h4>
-          <div>${short(rep.jito_top_wallet, 8)}</div>
-          <div class="num">${fmtNum(rep.jito_top_tokens)} tokens</div>
-          <div style="font-size:11px;opacity:0.6">${rep.jito_top_supply_pct.toFixed(3)}% of supply</div>
+          <h4>JITO TODAY</h4>
+          <div class="num">${fmtNum(topJitoSum)}</div>
+          <div style="font-size:11px;opacity:0.75;margin-top:4px">tokens captured by top 5 wallets</div>
+          <div style="font-size:11px;opacity:0.6;margin-top:2px">${(topJitoSum / TOTAL_SUPPLY_SCALED * 100).toFixed(2)}% of supply combined</div>
         </div>
         <div class="rp-side ooze">
           <h4>OOZE MODELED</h4>
-          <div>${short(rep.ooze_top_wallet, 8)}</div>
-          <div class="num">${fmtNum(rep.ooze_top_tokens)} tokens</div>
-          <div style="font-size:11px;opacity:0.6">${rep.ooze_top_supply_pct.toFixed(3)}% of supply</div>
+          <div class="num">${fmtNum(topOozeSum)}</div>
+          <div style="font-size:11px;opacity:0.75;margin-top:4px">tokens captured by same top 5 wallets</div>
+          <div style="font-size:11px;opacity:0.6;margin-top:2px">${(topOozeSum / TOTAL_SUPPLY_SCALED * 100).toFixed(2)}% of supply combined</div>
         </div>
       </div>
-      ${rep.reduction_pct > 1 ? `
-        <div style="margin-top:10px;color:var(--ooze);font-weight:bold;letter-spacing:1px">
-          → Top wallet acquires ${rep.reduction_pct.toFixed(1)}% FEWER tokens under Ooze
-        </div>` : ""}
-      <div style="margin-top:14px;padding:12px;background:rgba(0,255,85,0.04);border:1px solid var(--ooze-faint)">
-        <div style="font-size:12px">
-          Estimated price impact reduction: <b style="color:var(--ooze)">${rep.price_impact_reduction.toFixed(0)}%</b>
+
+      ${aggregateReduction > 1 ? `
+        <div style="margin-top:10px;color:var(--ooze);font-weight:bold;letter-spacing:1px;font-size:13px">
+          → Top 5 wallets collectively capture <b>${aggregateReduction.toFixed(1)}% FEWER</b> tokens under Ooze
+          ${dilutedCount > 0 ? ` · ${dilutedCount} of 5 wallets diluted` : ""}
         </div>
-        <div style="font-size:12px;margin-top:6px">
-          → Under Ooze, this ${e.event_type.toLowerCase()} would likely be <b>${adjusted.toFixed(0)}%</b> instead of <b>${e.abs_magnitude.toFixed(1)}%</b>.
+      ` : `
+        <div style="margin-top:10px;font-size:11px;opacity:0.55;letter-spacing:0.5px">
+          ⓘ Top wallets were mostly operating alone in their trade windows — limited Ooze impact on this specific event.
+        </div>
+      `}
+
+      ${walletsTable}
+
+      <div style="margin-top:18px;padding:14px;background:rgba(0,255,85,0.05);border:1px solid var(--ooze-faint)">
+        <div style="font-size:11px;letter-spacing:2px;opacity:0.75;margin-bottom:6px">PRICE IMPACT ESTIMATE</div>
+        <div style="font-size:13px;line-height:1.6">
+          This ${e.event_type.toLowerCase()} was <b>${e.abs_magnitude.toFixed(1)}%</b> on Jito today.
+          With <b>${e.coordination_pct.toFixed(0)}%</b> of its volume from clustered/coordinated trades,
+          Ooze would dilute roughly half that coordinated force.
+          <br><br>
+          → Under Ooze, modeled magnitude: <b style="color:var(--ooze);font-size:15px">${adjusted.toFixed(1)}%</b>
+          <span style="opacity:0.6">(vs ${e.abs_magnitude.toFixed(1)}% actual) — reduction of ${rep.price_impact_reduction.toFixed(0)}%</span>
         </div>
       </div>
-      <div style="margin-top:12px;font-size:10px;opacity:0.45;line-height:1.7">
+
+      <div style="margin-top:14px;padding:10px 12px;background:rgba(255,204,0,0.06);border-left:2px solid var(--yellow);font-size:11px;line-height:1.6;opacity:0.85">
+        <b style="color:var(--yellow);letter-spacing:1px">⚠ IMPORTANT CAVEAT</b><br>
+        This model assumes bundles still fire under Ooze, just with randomized intra-block ordering.
+        In reality, Ooze may disrupt bundle-based strategies <i>entirely</i> — coordinated wallets
+        that rely on atomic execution (sandwich attacks, precise pump-and-dump timing) might simply
+        not attempt the strategy if atomicity isn't guaranteed. The actual impact on these price events
+        could be substantially larger than modeled — some events may not happen at all.
+      </div>
+
+      <div style="margin-top:14px;font-size:10px;opacity:0.45;line-height:1.7">
         ${(rep.notes || []).map(n => `ⓘ ${esc(n)}`).join("<br>")}
       </div>
     </div>

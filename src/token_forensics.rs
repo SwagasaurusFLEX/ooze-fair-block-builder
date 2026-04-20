@@ -185,6 +185,13 @@ pub struct Cluster {
 }
 
 #[derive(Debug, Serialize, Clone)]
+pub struct WalletComparison {
+    pub wallet: String,
+    pub jito_tokens: f64,
+    pub ooze_tokens: f64,
+}
+
+#[derive(Debug, Serialize, Clone)]
 pub struct OozeReplay {
     pub trades_in_window: usize,
     pub jito_top_wallet: String,
@@ -195,6 +202,7 @@ pub struct OozeReplay {
     pub ooze_top_supply_pct: f64,
     pub reduction_pct: f64,           // how much fewer tokens top wallet gets under Ooze
     pub price_impact_reduction: f64,  // estimated price impact reduction
+    pub wallet_comparisons: Vec<WalletComparison>,  // top 5 wallets, jito vs ooze capture
     pub notes: Vec<String>,
 }
 
@@ -702,6 +710,7 @@ fn ooze_replay(event: &DramaticEvent) -> OozeReplay {
             jito_top_wallet: "—".into(), jito_top_tokens: 0.0, jito_top_supply_pct: 0.0,
             ooze_top_wallet: "—".into(), ooze_top_tokens: 0.0, ooze_top_supply_pct: 0.0,
             reduction_pct: 0.0, price_impact_reduction: 0.0,
+            wallet_comparisons: vec![],
             notes: vec!["No trades in window".into()],
         };
     }
@@ -709,7 +718,7 @@ fn ooze_replay(event: &DramaticEvent) -> OozeReplay {
     // Only look at the dominant direction for the event
     let target_dir = if event.event_type == "PUMP" { "buy" } else { "sell" };
 
-    // Actual (Jito) accumulation per wallet in target direction
+    // --- Actual (Jito) accumulation per wallet in target direction ---
     let mut jito_accum: HashMap<String, f64> = HashMap::new();
     for t in &event.trades {
         if t.direction == target_dir {
@@ -721,28 +730,64 @@ fn ooze_replay(event: &DramaticEvent) -> OozeReplay {
         .map(|(w, t)| (w.clone(), *t))
         .unwrap_or(("—".into(), 0.0));
 
-    // Ooze modeled: for each trade in cluster window, dilute by (1 - first_pos_advantage * (n-1)/n)
-    // where n = wallets trading same direction within 2 sec
-    let mut sorted: Vec<&Trade> = event.trades.iter().filter(|t| t.direction == target_dir).collect();
-    sorted.sort_by_key(|t| t.timestamp_ms);
+    // --- Ooze modeled: probabilistic re-ordering within each 2-second window ---
+    //
+    // Under Jito today, bundles land atomically — the bundling wallet captures
+    // the full intended token amount at the intended slippage.
+    //
+    // Under Ooze, when multiple wallets fire within the same ~2-second window,
+    // they all compete for the same liquidity at randomized ordering. A wallet
+    // that WOULD have gone first now has a 1/n chance of going first, 1/n of
+    // going second, etc. Later positions in a PUMP pay worse prices (less slippage
+    // headroom) — so we apply a cumulative dilution where wallets in positions
+    // 2..n capture progressively fewer tokens for the same SOL.
+    //
+    // For each trade, compute its expected token capture under Ooze:
+    //   - Find all trades in same 2s window, same direction
+    //   - If n = 1, no other wallets: capture full amount
+    //   - If n > 1, the wallet's expected token capture is reduced by
+    //     (1 - CUMULATIVE_SLIPPAGE_PENALTY * (avg_position - 1) / (n - 1))
+    //   - Averaged over positions 1..n, avg_position = (n+1)/2
+    //   - So effective_multiplier = 1 - CSP * ((n-1)/2) / (n-1) = 1 - CSP/2
+    //   - This means: any cluster of 2+ wallets caps the winner at ~(1 - CSP/2) = 75%
+    //   - Bigger clusters: the FIRST-position capture is even more rare (1/n chance),
+    //     so we further weight by 1/n for "full-capture probability".
+    //
+    // Simplified: effective_tokens_ooze = full_tokens * (1/n + (1 - 1/n) * (1 - CSP))
+    //   = full_tokens * (1/n * 1 + (n-1)/n * (1 - CSP))
+    //
+    // With CSP = 0.50 (late positions lose half their tokens on avg):
+    //   n=1: 1.0x    (no dilution)
+    //   n=2: 0.75x   (50% chance of full + 50% chance of half)
+    //   n=3: 0.666x
+    //   n=5: 0.60x
+    //   n=10: 0.55x
 
     const BLOCK_WINDOW_MS: u64 = 2_000;
-    const FIRST_POS_ADVANTAGE: f64 = 0.30;
+    const CUMULATIVE_SLIPPAGE_PENALTY: f64 = 0.50;
+
+    let mut sorted: Vec<&Trade> = event.trades.iter().filter(|t| t.direction == target_dir).collect();
+    sorted.sort_by_key(|t| t.timestamp_ms);
 
     let mut ooze_accum: HashMap<String, f64> = HashMap::new();
     for (idx, t) in sorted.iter().enumerate() {
         let window_lo = t.timestamp_ms.saturating_sub(BLOCK_WINDOW_MS / 2);
         let window_hi = t.timestamp_ms + BLOCK_WINDOW_MS / 2;
-        // Count unique wallets in this block window (looking locally)
-        let nearby_unique: HashSet<&str> = sorted[idx.saturating_sub(30)..]
+        // Count unique OTHER wallets in same block window (excluding self — a wallet
+        // firing many of its own trades in succession shouldn't compete with itself)
+        let self_wallet = t.wallet.as_str();
+        let others: HashSet<&str> = sorted[idx.saturating_sub(50)..]
             .iter()
-            .take(60)
+            .take(100)
             .filter(|o| o.timestamp_ms >= window_lo && o.timestamp_ms <= window_hi)
             .map(|o| o.wallet.as_str())
+            .filter(|w| *w != self_wallet)
             .collect();
-        let n = nearby_unique.len().max(1) as f64;
-        let dilution = 1.0 - FIRST_POS_ADVANTAGE * (n - 1.0) / n;
-        *ooze_accum.entry(t.wallet.clone()).or_insert(0.0) += t.token_amount * dilution;
+        let n = (others.len() + 1) as f64; // +1 to include self
+        let full_capture_prob = 1.0 / n;
+        let effective_multiplier = full_capture_prob * 1.0
+            + (1.0 - full_capture_prob) * (1.0 - CUMULATIVE_SLIPPAGE_PENALTY);
+        *ooze_accum.entry(t.wallet.clone()).or_insert(0.0) += t.token_amount * effective_multiplier;
     }
 
     let (ooze_wallet, ooze_tokens) = ooze_accum.iter()
@@ -754,9 +799,21 @@ fn ooze_replay(event: &DramaticEvent) -> OozeReplay {
         (1.0 - ooze_tokens / jito_tokens) * 100.0
     } else { 0.0 };
 
+    // Build top-5 wallet comparison list, sorted by jito_tokens descending
+    let mut comparison_list: Vec<WalletComparison> = jito_accum.iter()
+        .map(|(w, jt)| WalletComparison {
+            wallet: w.clone(),
+            jito_tokens: *jt,
+            ooze_tokens: *ooze_accum.get(w).unwrap_or(&0.0),
+        })
+        .collect();
+    comparison_list.sort_by(|a, b| b.jito_tokens.partial_cmp(&a.jito_tokens).unwrap_or(std::cmp::Ordering::Equal));
+    comparison_list.truncate(5);
+
     // Price impact reduction estimate:
-    // If coordination_pct of volume was driven by coordinated wallets, and Ooze breaks their atomicity,
-    // the portion of the price move attributable to coordination gets diluted by the ordering randomization.
+    // If coordination_pct of volume was driven by coordinated wallets, and Ooze
+    // breaks their atomicity, the portion of the price move attributable to
+    // coordination gets diluted by the ordering randomization.
     // Conservative estimate: the coordinated portion's price impact is halved under Ooze.
     let price_impact_reduction = event.coordination_pct * 0.5;
 
@@ -770,10 +827,11 @@ fn ooze_replay(event: &DramaticEvent) -> OozeReplay {
         ooze_top_supply_pct: ooze_tokens / TOTAL_SUPPLY * 100.0,
         reduction_pct: reduction,
         price_impact_reduction,
+        wallet_comparisons: comparison_list,
         notes: vec![
-            "Ordering-level simulation only.".into(),
-            "Assumes 30% first-position advantage; coordinated volume's price impact halved under Ooze.".into(),
-            "Does NOT model: bundler retry behavior, market reaction, AMM slippage curves exactly.".into(),
+            "Probabilistic ordering simulation: under Ooze, trades in same 2s window".into(),
+            "randomize into sequential positions; later positions pay worse slippage (50% penalty avg).".into(),
+            "Expected capture = (1/n × full) + ((n-1)/n × (1 - 0.5)). Does not model bundler retries or AMM curves exactly.".into(),
         ],
     }
 }

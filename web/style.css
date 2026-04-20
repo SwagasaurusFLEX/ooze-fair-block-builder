@@ -170,17 +170,106 @@ button:disabled {
 .status {
   background: var(--bg-panel);
   border: 1px solid var(--ooze-dim);
-  padding: 20px 30px;
+  padding: 30px;
   margin-bottom: 30px;
   font-size: 12px;
   letter-spacing: 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
 }
-.status.error { border-color: var(--red); color: var(--red); }
+.status.error {
+  border-color: var(--red);
+  color: var(--red);
+  padding: 20px 30px;
+  flex-direction: row;
+  justify-content: center;
+}
 .status .spinner {
   display: inline-block;
   animation: pulse-fast 1s infinite;
   margin-right: 10px;
 }
+
+/* ───── Goo / metaball loader ───── */
+.goo-wrap {
+  position: relative;
+  width: 220px;
+  height: 120px;
+  flex-shrink: 0;
+  flex-grow: 0;
+  flex-basis: 120px;
+  overflow: visible;
+}
+.goo-svg {
+  position: absolute;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+.goo-scene {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  filter: url(#goo-filter);
+  -webkit-filter: url(#goo-filter);
+}
+.goo-blob {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--ooze);
+  box-shadow: 0 0 18px var(--ooze);
+}
+.goo-blob-big {
+  width: 54px;
+  height: 54px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Satellite blob swings around big blob on changing pivots — 
+   the "mercury" drip-and-orbit effect */
+.goo-satellite {
+  width: 22px;
+  height: 22px;
+  top: 51%;
+  left: 53%;
+  margin-top: -11px;
+  margin-left: -11px;
+  animation: satellite-orbit 4s linear infinite;
+}
+
+@keyframes goo-pulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50%      { transform: translate(-50%, -50%) scale(1.15); }
+}
+
+@keyframes satellite-orbit {
+  0%   { transform-origin: 70% -160%; transform: rotate(0deg); }
+  5%   { transform-origin: 70% -220%; transform: rotate(0deg); }
+  49%  { transform-origin: 70% 0%;    transform: rotate(360deg); }
+  50%  { transform-origin: 80% 70%;   transform: rotate(0deg); }
+  95%  { transform-origin: 80% 290%;  transform: rotate(360deg); }
+  100% { transform-origin: 70% -160%; transform: rotate(0deg); }
+}
+
+.goo-msg {
+  font-family: monospace;
+  font-size: 12px;
+  letter-spacing: 2.5px;
+  color: var(--ooze);
+  text-shadow: 0 0 8px rgba(0, 255, 85, 0.4);
+  opacity: 0.9;
+  text-align: center;
+  min-height: 18px;
+  width: 100%;
+  max-width: 360px;
+  flex-shrink: 0;
+  transition: opacity 0.3s ease;
+}
+
 .hidden { display: none; }
 
 /* ───── Report sections ───── */
