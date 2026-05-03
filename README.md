@@ -6,9 +6,7 @@
 
 98.1% of Solana blocks run through Jito's auction system. Solana's leader schedule is public, so bots know which validator produces the next block. 770 out of 773 validators run Jito — meaning when a bot submits a bundle, it lands nearly 100% of the time. This creates a pay-to-play block space market where:
 
-- **Sandwich attacks** — a bot places its own buy before your trade and its own sell after, profiting from the price impact your trade creates
-- **Frontrunning** — a bot sees your pending transaction and pays a higher priority fee to execute the same trade before you
-- **Bundled launches** — a few actors use Jito bundles to buy a token from dozens of wallets simultaneously at launch, making it look like organic demand, then dumping the supply on retail buyers who thought the launch was fair
+- **Sandwich attacks** — a bot places its own buy before your trade and its own sell after, profiting from the price impact your trade createsn from dozens of wallets simultaneously at launch, making it look like organic demand, then dumping the supply on retail buyers who thought the launch was fair
 - **Coordinated sniping** — during the TrumpCoin launch, 62% of $280M in volume went through Jito bundles, meaning bots used guaranteed ordering to grab supply before retail could even land a transaction
 
 The result: retail users systematically lose value on every trade, and token launches that appear organic are often controlled by a few wallets using bundles.
@@ -34,6 +32,8 @@ Ooze is an alternative block builder that uses **cryptographically randomized or
 
 ## Architecture
 
+- **Frontrunning** — a bot sees your pending transaction and pays a higher priority fee to execute the same trade before you
+- **Bundled launches** — a few actors use Jito bundles to buy a toke
 ```
 ┌─────────────────────────────────────────────────┐
 │              Agave Validator TPU                 │
@@ -100,17 +100,17 @@ src/
 | Jito bundle hit rate | ~100% (770/773 leaders run Jito) |
 | Peak Jito tips (% of block revenue) | 50-66% (late 2024) |
 
-Full analysis: [Solana Validator Economics Dashboard](https://solana-validator-dashboard-7jlzowd9tcm93cafoend66.streamlit.app/)
+Full analysis: [Solana Validator Economics Dashboard](https://dashboard.ooze.run/)
 
 ## Roadmap
 
 - [x] Ordering comparison engine (this repo)
 - [x] MEV detection and quantification
 - [x] Monte Carlo sandwich probability analysis
+- [x] Agave validator client fork with Ooze scheduler ([ooze-validator](https://github.com/SwagasaurusFLEX/ooze-validator))
 - [ ] Real mempool data integration (Solana RPC websocket)
-- [ ] MEV fee redistribution mechanism design (concept — not yet implemented)
-- [ ] Agave validator client fork with Ooze scheduler
-- [ ] Stake pool for fair-ordering validator delegation
+- [ ] MEV fee redistribution mechanism design
+- [ ] Stake pool for fair-ordering validator delegation (oozeSOL)
 - [ ] Quantum entropy source integration
 
 ## Built With
