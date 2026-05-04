@@ -965,20 +965,16 @@ body.landing.entered #bg-canvas { display: none; }
   opacity: 0.35;
 }
 
-/* ───── Background image hook ─────
-   When you have an image, drop it in /web/assets/bg.jpg (or wherever)
-   and uncomment the block below.
-*/
-/*
+
+
 body.landing.entered::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
-  background-image: url("/assets/bg.jpg");
+  background-image: url("/assets/bg.png");
   background-size: cover;
   background-position: center;
   opacity: 0.25;
   pointer-events: none;
 }
-*/
