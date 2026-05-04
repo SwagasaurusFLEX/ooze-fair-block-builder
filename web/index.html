@@ -3,26 +3,27 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ooze</title>
+<title>Ooze — MEV and Bundler Retardant for Solana</title>
+<meta name="description" content="A fair-ordering Solana validator client. Replaces priority-fee auctions with cryptographic randomness. Multidimensional. Applied by validators.">
+<link rel="stylesheet" href="/style.css">
 
 <style>
-html, body {
-  margin: 0;
-  padding: 0;
-  overflow: hidden;
-  background: #000;
-}
+/* ───── Splash-only styles (kept inline so they don't conflict) ───── */
+body.on-splash { margin: 0; padding: 0; overflow: hidden; background: #000; }
 
-canvas {
+#splash-canvas {
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   display: block;
   touch-action: none;
   cursor: crosshair;
+  z-index: 50;
 }
 
-.info {
-  position: absolute;
+.splash-info {
+  position: fixed;
   inset: 0;
   display: flex;
   flex-direction: column;
@@ -34,20 +35,15 @@ canvas {
   color: #00ff55;
   pointer-events: none;
   mix-blend-mode: difference;
-  text-shadow:
-    0 0 20px #00ff55,
-    0 0 40px #00ff55;
-  animation: pulse 2.5s ease-in-out infinite;
+  text-shadow: 0 0 20px #00ff55, 0 0 40px #00ff55;
+  animation: splash-pulse 2.5s ease-in-out infinite;
   padding: 20px;
   text-align: center;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-  max-width: 100%;
-  box-sizing: border-box;
+  z-index: 51;
 }
 
-.hint {
-  position: absolute;
+.splash-hint {
+  position: fixed;
   bottom: 30px;
   left: 50%;
   transform: translateX(-50%);
@@ -58,21 +54,21 @@ canvas {
   opacity: 0.35;
   pointer-events: none;
   text-shadow: 0 0 10px #00ff55;
-  animation: pulse 4s ease-in-out infinite;
+  animation: splash-pulse 4s ease-in-out infinite;
+  z-index: 51;
 }
 
-@keyframes pulse {
+@keyframes splash-pulse {
   0%, 100% { opacity: 0.5; }
   50% { opacity: 1; }
 }
 
 @media (max-width: 768px) {
-  .info { font-size: 12px; letter-spacing: 1px; padding: 10px; }
-  .hint { font-size: 9px; letter-spacing: 2px; }
+  .splash-info { font-size: 12px; letter-spacing: 1px; padding: 10px; }
+  .splash-hint { font-size: 9px; letter-spacing: 2px; }
 }
 
-/* Transition overlay */
-.transition {
+.splash-transition {
   position: fixed;
   inset: 0;
   background: #000;
@@ -81,70 +77,74 @@ canvas {
   z-index: 100;
   transition: opacity 0.9s ease-in-out;
 }
-.transition.active {
+.splash-transition.active {
   opacity: 1;
   pointer-events: all;
 }
+
+/* When splash is dismissed, hide all splash elements */
+body.entered #splash-canvas,
+body.entered .splash-info,
+body.entered .splash-hint,
+body.entered .splash-transition { display: none; }
 </style>
 </head>
 
-<body>
+<body class="landing on-splash">
 
-<canvas id="c"></canvas>
-<div class="info"></div>
-<div class="hint">TRIPLE&nbsp;TAP&nbsp;TO&nbsp;ENTER</div>
-<div class="transition" id="transition"></div>
+<!-- ═══════════════════════════════════════════════════════════════
+     SPLASH — original WebGL fluid, triple-tap to enter
+     ═══════════════════════════════════════════════════════════════ -->
+<canvas id="splash-canvas"></canvas>
+<div class="splash-info"></div>
+<div class="splash-hint">TRIPLE&nbsp;TAP&nbsp;TO&nbsp;ENTER</div>
+<div class="splash-transition" id="splash-transition"></div>
 
+<!-- WebGL Fluid library -->
 <script src="https://cdn.jsdelivr.net/npm/webgl-fluid@0.3.0/dist/webgl-fluid.umd.min.js"></script>
 <script>
+// Initialize WebGL fluid
 setTimeout(() => {
-  const canvas = document.getElementById("c");
-
+  const canvas = document.getElementById("splash-canvas");
   WebGLFluid(canvas, {
     IMMEDIATE: true,
     TRIGGER: "click",
-
     SIM_RESOLUTION: 128,
     DYE_RESOLUTION: 1024,
-
     DENSITY_DISSIPATION: 0.975,
     VELOCITY_DISSIPATION: 0.92,
     PRESSURE: 0.15,
     PRESSURE_ITERATIONS: 50,
     CURL: 0,
-
     SPLAT_RADIUS: 0.15,
     SPLAT_FORCE: 8000,
-
     COLORFUL: false,
     PAUSED: false,
     SHADING: true,
     COLOR_UPDATE_SPEED: 0,
-
     BACK_COLOR: { r: 0, g: 0, b: 0 },
     TRANSPARENT: false,
     COLOR: { r: 0, g: 1, b: 0.2 },
-
     BLOOM: true,
     BLOOM_ITERATIONS: 10,
     BLOOM_RESOLUTION: 512,
     BLOOM_INTENSITY: 1.2,
     BLOOM_THRESHOLD: 0.5,
     BLOOM_SOFT_KNEE: 0.4,
-
     SUNRAYS: false
   });
 }, 100);
 
-// Triple-tap/click to enter analyzer (works on desktop and mobile)
+// Triple-tap to dismiss splash and reveal landing
 (function() {
   let taps = 0;
   let tapTimer = null;
+  let entered = false;
   const REQUIRED_TAPS = 3;
   const TAP_WINDOW_MS = 1000;
 
-  // pointerdown fires once for both mouse clicks AND touch taps
   document.addEventListener("pointerdown", function(e) {
+    if (entered) return;
     taps++;
     if (tapTimer) clearTimeout(tapTimer);
     tapTimer = setTimeout(() => { taps = 0; }, TAP_WINDOW_MS);
@@ -152,17 +152,206 @@ setTimeout(() => {
     if (taps >= REQUIRED_TAPS) {
       taps = 0;
       if (tapTimer) clearTimeout(tapTimer);
-      enterAnalyzer();
+      enterLanding();
     }
   });
 
-  function enterAnalyzer() {
-    const overlay = document.getElementById("transition");
+  function enterLanding() {
+    if (entered) return;
+    entered = true;
+    const overlay = document.getElementById("splash-transition");
     overlay.classList.add("active");
-    setTimeout(() => { window.location.href = "/analyze"; }, 900);
+    setTimeout(() => {
+      document.body.classList.remove("on-splash");
+      document.body.classList.add("entered");
+      document.getElementById("landing").classList.remove("hidden");
+      window.scrollTo(0, 0);
+    }, 900);
   }
 })();
 </script>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     LANDING — revealed after triple-tap
+     ═══════════════════════════════════════════════════════════════ -->
+<main id="landing" class="landing-main hidden">
+
+  <nav class="nav">
+    <div class="nav-logo"><a href="/">OOZE</a></div>
+    <div class="nav-links">
+      <a href="/analyze.html">FORENSICS</a>
+      <a href="https://dashboard.ooze.run" target="_blank" rel="noopener">DASHBOARD</a>
+      <a href="https://github.com/SwagasaurusFLEX/ooze-validator" target="_blank" rel="noopener">GITHUB</a>
+      <a class="nav-icon" href="https://x.com/0ooozzzzeeee" target="_blank" rel="noopener" aria-label="Follow on X">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+        </svg>
+      </a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="hero-logo">OOZE</div>
+    <div class="hero-tagline">
+      <div>MEV AND BUNDLER RETARDANT.</div>
+      <div>MULTIDIMENSIONAL. APPLIED BY SOLANA VALIDATORS.</div>
+    </div>
+    <div class="hero-ctas">
+      <a class="btn-primary" href="/analyze.html">ANALYZE A TOKEN →</a>
+      <a class="btn-secondary" href="https://github.com/SwagasaurusFLEX/ooze-validator" target="_blank" rel="noopener">VIEW THE CODE →</a>
+    </div>
+  </section>
+
+  <section class="problem">
+    <div class="section-label">§ THE PROBLEM</div>
+    <h2 class="problem-headline">Solana validators sort transactions by priority fee.<br>The richest wallet always wins.</h2>
+    <div class="stats-grid">
+      <div class="stat">
+        <div class="stat-num">98<span class="stat-unit">%</span></div>
+        <div class="stat-label">of validators run Jito's client</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">770<span class="stat-unit">/773</span></div>
+        <div class="stat-label">monopoly on block production</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">85<span class="stat-unit">%</span></div>
+        <div class="stat-label">decline in active validators since Oct 2024</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">$14.7M</div>
+        <div class="stat-label">extracted from retail in a single peak day</div>
+      </div>
+    </div>
+    <p class="problem-explainer">
+      Bundlers pay astronomical priority fees to land in positions 1–5. They buy the float at floor prices.
+      By the time retail's transaction lands at position 7, the price has 10x'd. Then the dump.
+      <br><br>
+      This pattern runs thousands of times per day. It's not a bug — it's the mechanism.
+    </p>
+  </section>
+
+  <section class="built">
+    <div class="section-label">§ WHAT WE BUILT</div>
+    <div class="cards">
+
+      <a class="card" href="/analyze.html">
+        <div class="card-tag">LIVE</div>
+        <div class="card-title">Forensics</div>
+        <div class="card-sub">ooze.run</div>
+        <div class="card-body">
+          On-chain analysis tool. Paste any Solana token, expose bundler clustering and sandwich patterns by wallet. The proof that the problem exists.
+        </div>
+        <div class="card-cta">Analyze a token →</div>
+      </a>
+
+      <a class="card" href="https://github.com/SwagasaurusFLEX/ooze-validator" target="_blank" rel="noopener">
+        <div class="card-tag">SHIPPED</div>
+        <div class="card-title">Validator Client</div>
+        <div class="card-sub">github.com/SwagasaurusFLEX/ooze-validator</div>
+        <div class="card-body">
+          Agave fork with a new transaction scheduler. Replaces priority-fee ordering with VRF-seeded randomness. Bundles can't be guaranteed. Sandwiches can't be constructed.
+        </div>
+        <div class="card-cta">View the code →</div>
+      </a>
+
+      <a class="card" href="https://dashboard.ooze.run" target="_blank" rel="noopener">
+        <div class="card-tag">LIVE</div>
+        <div class="card-title">Validator Economics</div>
+        <div class="card-sub">dashboard.ooze.run</div>
+        <div class="card-body">
+          Live dashboard analyzing 773 validators across 15GB+ of on-chain data. The structural case for fair-ordering infrastructure, in numbers.
+        </div>
+        <div class="card-cta">Open dashboard →</div>
+      </a>
+
+    </div>
+  </section>
+
+  <section class="how">
+    <div class="section-label">§ HOW IT WORKS</div>
+    <div class="how-grid">
+      <div class="how-step">
+        <div class="how-num">01</div>
+        <div class="how-title">Buffer</div>
+        <div class="how-body">Pending transactions accumulate in the validator's scheduler. Wait for at least 16 transactions or 50ms.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-num">02</div>
+        <div class="how-title">VRF</div>
+        <div class="how-body">Compute a verifiable random function over (slot, hash of tx_set) using the validator's identity Ed25519 keypair.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-num">03</div>
+        <div class="how-title">Shuffle</div>
+        <div class="how-body">Seed a ChaCha20 CSPRNG with the VRF output. Use it to randomize transaction order before block construction.</div>
+      </div>
+      <div class="how-step">
+        <div class="how-num">04</div>
+        <div class="how-title">Verify</div>
+        <div class="how-body">Anyone can take the published VRF proof and confirm the validator didn't cheat. No new key registry. No trust assumptions.</div>
+      </div>
+    </div>
+    <div class="how-result">
+      <div class="how-result-label">WHAT BREAKS</div>
+      <div>Atomic bundling · Sandwich attacks · Sniper rugs · Coordinated launches</div>
+    </div>
+    <div class="how-result preserved">
+      <div class="how-result-label">WHAT STAYS</div>
+      <div>Validator fee revenue · Honest arbitrage · Liquidations · Network throughput</div>
+    </div>
+  </section>
+
+  <section class="roadmap">
+    <div class="section-label">§ ROADMAP</div>
+    <div class="roadmap-grid">
+      <div class="roadmap-item shipped">
+        <div class="roadmap-version">v0</div>
+        <div class="roadmap-status">SHIPPED</div>
+        <div class="roadmap-body">
+          Validator client fork · Standalone VRF crate · Forensics tool live · Demo bundler · Comparison candlestick chart
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-version">v1</div>
+        <div class="roadmap-status">NEXT</div>
+        <div class="roadmap-body">
+          Public devnet deployment · oozeSOL liquid staking pool · DEX integrations · Forensics counterfactual replay
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-version">v1.5</div>
+        <div class="roadmap-status">SOON</div>
+        <div class="roadmap-body">
+          ECVRF migration · On-chain VRF proof publication · Validator monitoring dashboard
+        </div>
+      </div>
+      <div class="roadmap-item">
+        <div class="roadmap-version">v2</div>
+        <div class="roadmap-status">FUTURE</div>
+        <div class="roadmap-body">
+          Threshold VRF · Distributed randomness beacon · Protocol-level enforcement · Quantum entropy research
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="footer-tagline">
+      OOZE · MEV AND BUNDLER RETARDANT · APPLIED BY SOLANA VALIDATORS
+    </div>
+    <div class="footer-links">
+      <a href="/analyze.html">Forensics</a>
+      <a href="https://dashboard.ooze.run" target="_blank" rel="noopener">Dashboard</a>
+      <a href="https://github.com/SwagasaurusFLEX/ooze-validator" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://x.com/0ooozzzzeeee" target="_blank" rel="noopener">X / Twitter</a>
+    </div>
+    <div class="footer-credit">
+      Built for Colosseum Frontier · Apache 2.0
+    </div>
+  </footer>
+
+</main>
 
 </body>
 </html>
