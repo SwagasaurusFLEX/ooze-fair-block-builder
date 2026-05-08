@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ooze — MEV and Bundler Retardant for Solana</title>
-<meta name="description" content="A fair-ordering Solana validator client. Replaces priority-fee auctions with cryptographic randomness. Multidimensional. Applied by validators.">
+<meta name="description" content="A fair-ordering Solana validator client. Replaces priority-fee auctions with cryptographic randomness. Multidimensional. Apply to blockchain.">
 <link rel="stylesheet" href="/style.css">
 
 <style>
@@ -87,6 +87,21 @@ body.entered #splash-canvas,
 body.entered .splash-info,
 body.entered .splash-hint,
 body.entered .splash-transition { display: none; }
+
+/* ───── Hero CTA size bump (overrides /style.css for the hero buttons only) ───── */
+.hero-ctas .btn-primary,
+.hero-ctas .btn-secondary {
+  font-size: 18px;
+  padding: 18px 38px;
+  letter-spacing: 2px;
+}
+@media (max-width: 600px) {
+  .hero-ctas .btn-primary,
+  .hero-ctas .btn-secondary {
+    font-size: 15px;
+    padding: 14px 24px;
+  }
+}
 </style>
 </head>
 
@@ -195,7 +210,7 @@ setTimeout(() => {
     <div class="hero-logo">OOZE</div>
     <div class="hero-tagline">
       <div>MEV AND BUNDLER RETARDANT.</div>
-      <div>MULTIDIMENSIONAL. APPLIED BY SOLANA VALIDATORS.</div>
+      <div>MULTIDIMENSIONAL. APPLY TO BLOCKCHAIN.</div>
     </div>
     <div class="hero-ctas">
       <a class="btn-primary" href="https://lab.ooze.run" target="_blank" rel="noopener">TRY OOZE →</a>
@@ -264,6 +279,16 @@ setTimeout(() => {
           Live dashboard analyzing 773 validators across 15GB+ of on-chain data. The structural case for fair-ordering infrastructure, in numbers.
         </div>
         <div class="card-cta">Open dashboard →</div>
+      </a>
+
+      <a class="card" href="https://lab.ooze.run" target="_blank" rel="noopener">
+        <div class="card-tag">LIVE</div>
+        <div class="card-title">Labs</div>
+        <div class="card-sub">lab.ooze.run</div>
+        <div class="card-body">
+          A playground to test Ooze. Drip free SOL, point your wallet at the RPC, send transactions through a fair-ordering validator. More tools coming.
+        </div>
+        <div class="card-cta">Enter the lab →</div>
       </a>
 
     </div>
