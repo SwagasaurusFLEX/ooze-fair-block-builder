@@ -749,8 +749,11 @@ body.landing.entered #bg-canvas { display: none; }
 }
 .cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+@media (max-width: 1100px) {
+  .cards { grid-template-columns: repeat(2, 1fr); gap: 24px; }
 }
 .card {
   display: block;
@@ -987,4 +990,50 @@ body.landing.entered::before {
 body.landing.entered .landing-main {
   position: relative;
   z-index: 10;
+}
+
+/* ───── Consensus section ───── */
+.consensus {
+  padding: 80px 0;
+  border-top: 1px solid var(--ooze-faint);
+}
+.consensus-headline {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 1px;
+  line-height: 1.4;
+  color: var(--ooze);
+  text-shadow: 0 0 12px var(--ooze-glow);
+  margin: 0 0 40px 0;
+}
+.consensus-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+}
+.consensus-block {
+  background: var(--bg-panel);
+  border: 1px solid var(--ooze-dim);
+  padding: 32px 28px;
+  box-shadow: 0 0 20px var(--ooze-faint);
+}
+.consensus-label {
+  font-size: 11px;
+  letter-spacing: 4px;
+  font-weight: bold;
+  color: var(--ooze);
+  text-shadow: 0 0 8px var(--ooze-glow);
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--ooze-faint);
+}
+.consensus-body {
+  font-size: 13px;
+  line-height: 1.8;
+  opacity: 0.85;
+}
+@media (max-width: 768px) {
+  .consensus-headline { font-size: 22px; }
+  .consensus-grid { grid-template-columns: 1fr; }
+  .consensus-block { padding: 24px 22px; }
 }
